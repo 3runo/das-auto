@@ -1,0 +1,24 @@
+[package]
+name = "das-auto"
+version = "0.1.0"
+authors = ["Bruno Batista <bruno.batista@tacto.ai>"]
+edition = "2021"
+
+[application]
+name = "das-auto"
+default_platform = "mobile"
+
+[bundle]
+identifier = "com.tacto.dasauto"
+publisher = "Bruno Batista"
+
+[dependencies]
+dioxus = { version = "0.8.0-alpha.3", features = [] }
+dasauto-core = { path = "../crates/core" }
+dasauto-net = { path = "../crates/net" }
+
+[features]
+default = ["mobile"]
+web = ["dioxus/web"]
+desktop = ["dioxus/desktop"]
+mobile = ["dioxus/mobile"]

@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v1
+
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy (core + net, host)
+        run: cargo clippy -p dasauto-core -p dasauto-net --all-targets -- -D warnings
+
+      - name: tests (core + net, host)
+        run: cargo test -p dasauto-core -p dasauto-net
+
+      - name: wasm32 check (core + net)
+        run: cargo check -p dasauto-core -p dasauto-net --target wasm32-unknown-unknown
+
+      - name: install dioxus CLI
+        run: cargo install dioxus-cli --locked --version 0.7.10
+
+      - name: web smoke build (app)
+        working-directory: app
+        run: dx build --web
