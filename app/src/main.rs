@@ -38,13 +38,19 @@ fn main() {
 
 #[component]
 fn App() -> Element {
-    let mut active = use_signal(|| Tab::Home);
+    let active = use_signal(|| Tab::Home);
     let select = {
         let mut active = active;
         move |t: Tab| {
             active.set(t);
         }
     };
+
+    // NOTE (dioxus 0.8.0-alpha.3 quirks, verified on wasm): components with
+    // props fail in a match arm inside rsx!, and `Component { .. }`
+    // construction outside rsx! does not compile either. Map tab → screen
+    // through a plain fn returning Element.
+    let content: Element = empty_screen(active().label());
 
     rsx! {
         document::Link { rel: "icon", href: FAVICON }
@@ -57,15 +63,7 @@ fn App() -> Element {
                     TabButton { tab: t, active: active() == t, on_click: select.clone() }
                 }
             }
-            section { class: "content",
-                match active() {
-                    Tab::Home => EmptyScreen { title: "Início" },
-                    Tab::Expenses => EmptyScreen { title: "Despesas" },
-                    Tab::Documents => EmptyScreen { title: "Documentos" },
-                    Tab::Parts => EmptyScreen { title: "Peças" },
-                    Tab::Profile => EmptyScreen { title: "Perfil" },
-                }
-            }
+            section { class: "content", {content} }
         }
     }
 }
@@ -81,8 +79,7 @@ fn TabButton(tab: Tab, active: bool, on_click: EventHandler<Tab>) -> Element {
     }
 }
 
-#[component]
-fn EmptyScreen(title: String) -> Element {
+fn empty_screen(title: &str) -> Element {
     rsx! {
         div { class: "empty",
             h2 { {title} }
