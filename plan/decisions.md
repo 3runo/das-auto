@@ -43,9 +43,9 @@ Critical decisions with rationale. Numbered IDs are referenced by `plan.md` and 
 - **Date:** 2026-11-05, confirmed by owner 2026-11-05.
 
 ### D9 — Dioxus mobile packaging: mobile target confirmed (spike T0-1, 2026-11-07)
-- **Decision:** Primary packaging = Dioxus mobile target. The spike proved `dx build --ios` builds, installs, and runs on an iOS simulator, and `dx build --web` works in a real browser. The Capacitor-web fallback is NOT triggered. (Android leg was still blocked on the SDK download at report time — see report below; it does not change the decision, it only delays the Android confirmation.)
-- **Rationale:** Either path ships a native binary to the stores; the mobile target works end-to-end for the parts that were testable, so switching packaging now would buy nothing.
-- **Date:** 2026-11-05 (decision), spike outcome recorded 2026-11-07.
+- **Decision:** Primary packaging = Dioxus mobile target. The spike proved `dx build --ios` builds, installs, and runs on an iOS simulator, `dx build --web` works in a real browser, and the Android leg builds, installs, launches, and renders on an emulator — including kill/restart persistence through the native bridge. The Capacitor-web fallback is NOT triggered.
+- **Rationale:** Either path ships a native binary to the stores; the mobile target works end-to-end on all three tested surfaces, so switching packaging now would buy nothing.
+- **Date:** 2026-11-05 (decision); iOS+Web legs recorded 2026-11-07; Android leg confirmed 2026-11-09.
 
 #### D9 appendix — T0-1 spike report (2026-11-07)
 **Environment:** macOS 27.2 (Apple Silicon), Xcode 27.2, Rust 1.99.0, Dioxus CLI 0.7.10, dioxus crate **0.8.0-alpha.3** (this combo is what T1-1 will reuse). Spike repo: `/Users/bruno/git/das-auto-spike/spike` (throwaway, last commit `4be1e9d`).
@@ -65,8 +65,15 @@ Critical decisions with rationale. Numbered IDs are referenced by `plan.md` and 
 - File input: `DOM.setFileInputFiles` with a test PNG → status `OK: test-photo.png (70 bytes, image/png)` + base64 preview rendered (bytes read through Rust `FileData::read_bytes()`).
 - PDF data-URL iframe rendered; no error states observed.
 
-**Android: PENDING (network-blocked, retry in progress)**
-- `sdkmanager --licenses` hung 3h at "Fetching remote repository 37%" (network to dl.google.com flaky); a retry passed licenses but the **emulator zip download came back corrupt** ("Error on ZipFile unknown archive"). Second retry running in background; `aarch64-linux-android` rustup target installed in the meantime. When the SDK lands: `avdmanager create avd -n spike -k "system-images;android-36;google_apis;arm64-v8a"` → boot → `dx build --android` → `adb install` → launch → `adb exec-out screencap -p`, and append the outcome here.
+**Android — emulator pixel_6 (arm64), AVD `spike`, android-36 `google_apis;arm64-v8a` v7: PASS (2026-11-09)**
+- Toolchain: NDK r27c (`27.2.12479018`), JDK Temurin 21, Gradle 9.1.0 (wrapper), AGP 8.7.0, Kotlin 2.0.20.
+- Exact flow (see **D16** for why it is three steps): (1) `dx build --android` with `ANDROID_HOME`, `ANDROID_NDK_HOME`, `JAVA_HOME` set — runs the Rust/NDK cross-compile, then fails at `:app:compileDebugKotlin` (missing `lifecycle-process` in the generated project); (2) patch the generated `target/dx/spike/debug/android/app/app/build.gradle.kts` — add `implementation("androidx.lifecycle:lifecycle-process:2.8.6")`; (3) run `./gradlew :app:assembleDebug` directly in `target/dx/spike/debug/android/app` (NOT via dx — dx regenerates the project tree and wipes the patch).
+- Install/launch: `adb install -r app/app/build/outputs/apk/debug/app-debug.apk` → Success; `adb shell am start -n com.example.Spike/dev.dioxus.main.MainActivity` → launches clean; `adb exec-out screencap -p` → screenshot.
+- **Render: PASS.** All 3 cards fully rendered (vision-verified): title, persistence card with buttons, both camera/gallery file inputs as native pickers, PDF section. Evidence: `plan/assets/spike-android.png` (main repo).
+- **Persistence across kill/restart: PASS.** UI showed `PERSISTED: nº 1` + `Auto-save no boot → arquivo (nativo): 1` — the counter value written by the previous native process was read back from the app data dir at boot, same proof pattern as the iOS leg (native file backend, not wasm).
+- APK size: **72.5 MB** (debug, arm64 + .so + webview). Incremental `gradlew assembleDebug` after the Rust/NDK phase: ~21s; the failed `dx` run that produced the template error: ~7min (mostly dependency downloads over a flaky network).
+- **Network pitfalls (environment, not Dioxus):** services.gradle.org wrapper download and dl.google.com maven downloads both timed out repeatedly. Fixes that worked: pre-fetch the wrapper zip with `curl --retry 30 --retry-all-errors` into `~/.gradle/wrapper/dists/gradle-9.1.0-bin/9agqghryom9wkf8r80qlhnts3/` (verify with `unzip -t`, delete stale `.lck`); global `~/.gradle/gradle.properties` with `org.gradle.jvmargs=-Dsun.net.client.defaultReadTimeout=120000 -Dsun.net.client.defaultConnectTimeout=30000 -Xmx3g`. Module cache accumulates across retries.
+- **Shellcheck note:** `dx`-emitted `DX-ANDROID-EXIT:$?` after a pipeline reflects `tail`'s exit code in sh (no `PIPESTATUS`) — always read the gradle log, not the echo.
 
 **New dependencies recorded (rules.md §4):**
 - `gloo-storage 0.3` — browser `localStorage` for the wasm target (the standard wasm binding; rejected: hand-rolled wasm-bindgen localStorage calls).
@@ -102,6 +109,11 @@ Critical decisions with rationale. Numbered IDs are referenced by `plan.md` and 
 ### D15 — Conflict tie-break: local wins, plus row-compare equality (T1-2, 2026-11-09)
 - **Decision:** In `resolve_conflict` (LWW by `updated_at`), when timestamps are equal the **local** copy wins (its edits are the user's most recent intent). Before comparing, both sides are canonicalized (sorted keys, nulls dropped) — equal rows mean the remote change is re-applied verbatim (no divergence), so it's treated as "local already correct" and no write-back occurs.
 - **Rationale:** Equal `updated_at` is indistinguishable from a stale remote cache; surfacing that as a remote write would clobber unsent local edits. Canonicalization keeps "same data, different key order" from producing a spurious local-wins round-trip.
+- **Date:** 2026-11-09.
+
+### D16 — Dioxus 0.8.0-alpha.3 Android template bug: missing `lifecycle-process` + dx regenerates the project (T0-1, 2026-11-09)
+- **Decision:** Until the dioxus version is bumped, every Android build follows this exact flow: (1) `dx build --android` — runs the Rust/NDK phase, then fails at `:app:compileDebugKotlin` with `Unresolved reference 'ProcessLifecycleOwner'`; (2) patch the generated `target/dx/<app>/debug/android/app/app/build.gradle.kts` to add `implementation("androidx.lifecycle:lifecycle-process:2.8.6")`; (3) run `./gradlew :app:assembleDebug` directly inside `target/dx/<app>/debug/android/app`. Do NOT re-run `dx build --android` after patching — **dx regenerates the entire generated Android project tree on every run and wipes local patches.**
+- **Rationale:** The template's `WryActivity.kt` (copied from wry) imports `androidx.lifecycle.ProcessLifecycleOwner` + `.lifecycle` extensions, but the generated `build.gradle.kts` only declares webkit/appcompat/material — no `lifecycle-process`, so the Kotlin compile fails. Upstream context: DioxusLabs/dioxus#5878 (WryActivity lifecycle wiring) and PR #5936 (tao 0.37/wry 0.57 import reshuffle shows template deps tracking wry's Kotlin). Re-verify template deps when the dioxus pin changes — the workaround may become unnecessary (or the wrong dep).
 - **Date:** 2026-11-09.
 
 ## Deferred / Open (referenced by plan.md §10)

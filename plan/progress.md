@@ -1,8 +1,14 @@
 # Progress Log
 
 ## Status
-- **Phase:** Phase 1 — **T1-1 done (committed `30a404c`); T1-2 done (committed `ee5477d`, all gates green).** T0-1 Android leg still open (spike).
-- **Current task:** **T1-3** (Supabase auth + vehicle registry + Home) — needs a Supabase project (URL + anon key) from the owner; see Next Steps. T0-1 Android leg in parallel when the emulator is ready.
+- **Phase:** Phase 1 — **T0-1 spike COMPLETE (all 3 legs PASS)**; **T1-1 done (`30a404c`)**; **T1-2 done (`ee5477d` + `03ccd26`, all gates green).**
+- **Current task:** **T1-3** (Supabase auth + vehicle registry + Home) — blocked on a Supabase project (URL + anon key) from the owner; see Next Steps.
+
+### Session checkpoint 2026-11-09 (agent — T0-1 Android leg closed; spike COMPLETE)
+- **T0-1 DONE:** Android leg PASS on emulator (pixel_6 arm64, android-36, NDK r27c, JDK 21). Full report in the D9 appendix (decisions.md). New decision **D16** records the dioxus 0.8.0-alpha.3 Android template bug (generated `WryActivity.kt` needs `androidx.lifecycle:lifecycle-process`, which the generated `build.gradle.kts` omits) and the working 3-step flow: `dx build --android` (fails at kotlin compile) → patch generated gradle file → `./gradlew :app:assembleDebug` directly (dx wipes the generated tree on every run).
+- APK 72.5MB debug; install + launch clean; full UI render vision-verified (all 3 cards); **persistence across restart confirmed** (`PERSISTED: nº 1` read back from the native file backend at boot). Evidence: `plan/assets/spike-android.png`.
+- Environment fixes that unblocked the build: Gradle 9.1.0 wrapper zip pre-fetched via `curl --retry 30 --retry-all-errors` (services.gradle.org timed out in the wrapper repeatedly); `~/.gradle/gradle.properties` with 120s read timeout for dl.google.com maven. Pitfall recorded: `DX-*-EXIT:$?` after a pipeline in sh reflects `tail`'s exit, not dx's.
+- **T1-2 fix committed (`03ccd26`):** app's `web` feature now enables `dasauto-net/wasm` — `GlooStore` was previously never compiled into the real web bundle (its feature was defined but not wired). Verified with `dx build --web` (187 crates, success). Also forced-reverified `cargo check -p dasauto-net --features wasm --target wasm32-unknown-unknown` clean.
 
 ### Session checkpoint 2026-11-09 (agent — T1-2 completed & committed)
 - **T1-2 DONE:** domain model + local storage layer in the real repo (`/Users/bruno/git/das-auto`):
@@ -68,14 +74,14 @@
 - [x] 2026-11-05 — `rules.md`: agent protocol, quality gates (fmt/clippy/test), mandatory meaningful unit tests, architecture and security rules.
 - [x] 2026-11-05 — Researched DETRAN/Denatran API landscape (no public self-service API) and Mercado Livre search API details; recorded in plan.md §6 + D7.
 - [x] 2026-11-05 — Owner answered all open questions: Supabase backend confirmed, Apple SSO deferred, in-app-only alerts, working title "Das Auto" (D13). Plan bumped to v2.1; §10 now "Owner Confirmations".
+- [x] 2026-11-09 — **T0-1 Dioxus mobile-target spike — COMPLETE, all 3 legs PASS** (iOS sim 2026-11-07, web 2026-11-07, Android emulator 2026-11-09; persistence across restart proven on iOS and Android; D9 decision finalized, D16 template-bug workaround recorded). Packaging decision: Dioxus mobile target (D9) — Capacitor fallback not triggered.
 - [x] 2026-11-08 — **T1-1 Repo scaffold + CI** (local gates all green: fmt/clippy/test/wasm32/dx-build-web; 5-tab skeleton render verified via CDP; dioxus rsx pitfall recorded as D14; commit `30a404c`). Caveat: GitHub Actions not yet run — no GitHub remote on the repo yet (owner action); CI file is in place per plan.
-- [x] 2026-11-09 — **T1-2 Domain model + local storage layer** (entities + centavos, `Money::parse` pt-BR, plate normalize/validate, `LocalStore` + `MemoryStore` + `GlooStore` (wasm), `SyncQueue` + in-memory impl, golden fixtures; 73 core + 63 net tests green; wasm32 check green; commit `ee5477d`).
+- [x] 2026-11-09 — **T1-2 Domain model + local storage layer** (entities + centavos, `Money::parse` pt-BR, plate normalize/validate, `LocalStore` + `MemoryStore` + `GlooStore` (wasm), `SyncQueue` + in-memory impl, golden fixtures; 73 core + 63 net tests green; wasm32 check green; commits `ee5477d` + `03ccd26` (web feature wiring)).
 
 ## In Progress
-- [ ] **T0-1 Dioxus mobile-target spike** — iOS leg PASS + Web leg PASS (2026-11-07); **Android leg open** (2026-11-08): SDK + AVD + emulator ready, NDK r27c was downloading → build → install → screencap → D9 appendix.
 - [ ] **T1-3 Auth + vehicle registry + Home** — blocked on a Supabase project (URL + anon key) from the owner.
 
-## T0-1 HANDOFF — for the agent resuming this task
+## T0-1 HANDOFF — for the agent resuming this task (ARCHIVED 2026-11-09 — task complete; kept as process record)
 
 ### What already exists
 - **Spike app:** `/Users/bruno/git/das-auto-spike/spike` (throwaway, *outside* the main repo `/Users/bruno/git/das-auto`; T1-1 will create the real workspace there).
@@ -130,7 +136,7 @@ Re-run to see full text: `cd /Users/bruno/git/das-auto-spike/spike && cargo chec
 - [x] 2026-11-08 — T1-1 scaffold + local gates + commit (see checkpoint above).
 - [x] 2026-11-09 — T1-2 domain model + local storage + gates + commit (see checkpoint above).
 - [ ] T1-3 (blocked on owner): Supabase project URL + anon key → then Supabase client in `net`, auth screens, vehicle CRUD + wizard, migrations + RLS (plan.md §4), Home live.
-- [ ] T0-1 Android leg (NDK r27c → `dx build --android` → install → screencap → D9 appendix; details in 2026-11-08 checkpoint).
+- [x] 2026-11-09 — T0-1 Android leg closed — all 3 legs PASS; D9 finalized + D16 workaround (see checkpoint above).
 - [ ] Owner: push repo to a GitHub remote so the CI in `.github/workflows/ci.yml` can run (non-blocking locally).
 
 ## Issues / Notes
