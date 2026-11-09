@@ -4,3 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+dasauto-core = { path = "../core" }
+
+# Browser storage backend for the LocalStore trait. wasm32-only crate; on
+# other targets the store module compiles to an empty stub (rules.md §4).
+gloo-storage = { version = "0.3", optional = true }
+
+[features]
+default = []
+wasm = ["gloo-storage"]

@@ -4,6 +4,9 @@
 //! on the host and the UI can be developed offline. The real Supabase
 //! client lands in T1-3.
 
+#[cfg(feature = "wasm")]
+pub mod store;
+
 #[cfg(test)]
 mod tests {
     #[test]

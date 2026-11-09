@@ -60,7 +60,7 @@ fn App() -> Element {
             p { class: "sub", "Skeleton T1-1 — 5 abas" }
             nav { class: "tabs",
                 for t in Tab::ALL {
-                    TabButton { tab: t, active: active() == t, on_click: select.clone() }
+                    TabButton { tab: t, active: active() == t, on_click: select }
                 }
             }
             section { class: "content", {content} }

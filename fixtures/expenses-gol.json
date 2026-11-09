@@ -1,0 +1,32 @@
+[
+  {
+    "id": "00000000-0000-0000-0000-000000000004",
+    "vehicle_id": "00000000-0000-0000-0000-000000000002",
+    "user_id": "00000000-0000-0000-0000-000000000001",
+    "category": "fuel",
+    "title": "Gasolina",
+    "amount_cents": 25000,
+    "occurred_on": "2026-11-01",
+    "odometer_km": 81230,
+    "location": "Posto Ipiranga",
+    "notes": null,
+    "deleted_at": null,
+    "created_at": "2026-11-01T18:00:00Z",
+    "updated_at": "2026-11-01T18:00:00Z"
+  },
+  {
+    "id": "00000000-0000-0000-0000-000000000005",
+    "vehicle_id": "00000000-0000-0000-0000-000000000002",
+    "user_id": "00000000-0000-0000-0000-000000000001",
+    "category": "maintenance",
+    "title": "Troca de óleo",
+    "amount_cents": 28700,
+    "occurred_on": "2026-10-20",
+    "odometer_km": 80100,
+    "location": "Oficina do Zé",
+    "notes": "Filtro incluso",
+    "deleted_at": null,
+    "created_at": "2026-10-20T15:30:00Z",
+    "updated_at": "2026-10-21T09:00:00Z"
+  }
+]

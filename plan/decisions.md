@@ -94,6 +94,16 @@ Critical decisions with rationale. Numbered IDs are referenced by `plan.md` and 
 - **Decision:** App working title is **"Das Auto"** (owner, 2026-11-05). Local storage namespace prefix: `dasauto:`. Bundle id needs the company/CNPJ — candidate `com.<company>.dasauto`, to finalize at T3-2.
 - **Date:** 2026-11-05.
 
+### D14 — Dioxus 0.8.0-alpha.3 rsx pitfalls (verified on wasm32, T1-1)
+- **Decision:** Avoid two patterns until the dioxus version is stable: (1) instantiating a component **with props inside a `match` arm inside `rsx!`** (props are not generated for that variant); (2) constructing `Component { .. }` **outside** `rsx!` as plain Rust (same missing-props error; `&'static str` props additionally fail). Mapping screen-by-state must go through a plain fn returning `Element` (e.g. `fn empty_screen(title: &str) -> Element { rsx! { ... } }`) or by switching on plain data inside `rsx!`.
+- **Rationale:** Hit twice during T1-1; both break `cargo build --target wasm32-unknown-unknown` with E0559/E0277 while host compiles look fine, so only the wasm gate catches it (CI runs the web smoke build — keep it).
+- **Date:** 2026-11-08.
+
+### D15 — Conflict tie-break: local wins, plus row-compare equality (T1-2, 2026-11-09)
+- **Decision:** In `resolve_conflict` (LWW by `updated_at`), when timestamps are equal the **local** copy wins (its edits are the user's most recent intent). Before comparing, both sides are canonicalized (sorted keys, nulls dropped) — equal rows mean the remote change is re-applied verbatim (no divergence), so it's treated as "local already correct" and no write-back occurs.
+- **Rationale:** Equal `updated_at` is indistinguishable from a stale remote cache; surfacing that as a remote write would clobber unsent local edits. Canonicalization keeps "same data, different key order" from producing a spurious local-wins round-trip.
+- **Date:** 2026-11-09.
+
 ## Deferred / Open (referenced by plan.md §10)
 - [ ] Bundle id: needs company/CNPJ from owner before T3-2 (candidate `com.<company>.dasauto`).
 - [ ] Push/APNs plugin choice (after D9 outcome + phase 2).

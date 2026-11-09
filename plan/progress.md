@@ -1,8 +1,19 @@
 # Progress Log
 
 ## Status
-- **Phase:** Phase 0 — **T0-1 (Dioxus mobile-target spike) — iOS + Web legs VERIFIED 2026-11-07; Android leg pending (SDK download network-blocked, retry running).**
-- **Current task:** finish Android leg (or record the blocker), then **T1-1** (repo scaffold + CI).
+- **Phase:** Phase 1 — **T1-1 done locally (all gates green, committed); T0-1 Android leg finishing (NDK downloading → emulator → install → launch).**
+- **Current task:** finish T0-1 Android leg (append to D9), then **T1-2** (domain model + local storage).
+
+### Session checkpoint 2026-11-08 (agent — T1-1 verified & committed; T0-1 Android leg unblocked)
+- **T0-1 Android leg unblocked:** previous session's retry 2 actually completed — full SDK installed (platform-tools 37.0.1, platforms;android-36, build-tools;36.0.0, emulator 37.2.13, system-images;android-36;google_apis;arm64-v8a v7). **NDK was still missing** (`dx build --android` demands `ANDROID_NDK_HOME`) — installing `ndk;27.2.12479018` (r27c, latest stable). AVD `spike` (pixel_6, arm64) created; emulator booted headless (`sys.boot_completed=1`, `emulator-5554`).
+- **T1-1 DONE (local gates):** workspace `core`/`net`/`app` scaffold already existed from 11-07 session (committed in `d80f8de`). This session: removed throwaway `app/src/bin/probe.rs`; fixed the wasm build break in `app/src/main.rs` (dioxus 0.8.0-alpha.3: component-with-props fails in rsx! match arms AND outside rsx! — now mapped via plain fn `empty_screen(title: &str) -> Element`; recorded as **D14** in decisions.md).
+  - Gates: `cargo fmt --check` ✓ · `cargo clippy -p dasauto-core -p dasauto-net --all-targets -- -D warnings` ✓ · `cargo test` ✓ (6 core + 1 net) · `cargo check --target wasm32-unknown-unknown` (core+net) ✓ · `dx build --web` ✓.
+  - Render verified via CDP on the served build: h1 "Das Auto", 5 tabs (Início/Despesas/Documentos/Peças/Perfil), clicking each tab switches content + active state.
+  - **Committed:** `30a404c`. **Not done:** GitHub Actions has never run — the repo has no remote yet (owner must push to GitHub for CI verification).
+- **Next steps (in order):**
+  1. T0-1 Android: when NDK lands → `dx build --android` (spike repo) → `adb install` → launch `com.example.spike` → `adb exec-out screencap -p` → append Android outcome to D9 appendix (mark T0-1 complete in this file).
+  2. **T1-2** in `/Users/bruno/git/das-auto`: `core` entity types (Vehicle, Expense, Document, Deadline, SavedPartsSearch) with centavos `i64` + serde round-trip tests (incl. plate normalization, zero amounts, nulls); `LocalStore` trait + `MemoryStore` fake + `GlooStore` impl (wasm-only, behind trait so host tests stay green); `SyncQueue` trait + in-memory impl.
+- Gates: CI defined in `.github/workflows/ci.yml` (fmt/clippy/test/wasm32/dx-build-web) — unverifiable until repo is pushed to a GitHub remote.
 
 ### Session checkpoint 2026-11-07 (agent — T0-1 completed iOS/Web legs)
 - **iOS leg DONE (PASS):** `dx build --ios` (no `--device`) → `Spike.app` (debug, 26MB, ios-sim platform 7, ad-hoc signed) → installed + launched on iPhone 17 sim (iOS 27.2, 92E96A08-…). Full D9 report in `decisions.md`.
@@ -41,9 +52,10 @@
 - [x] 2026-11-05 — `rules.md`: agent protocol, quality gates (fmt/clippy/test), mandatory meaningful unit tests, architecture and security rules.
 - [x] 2026-11-05 — Researched DETRAN/Denatran API landscape (no public self-service API) and Mercado Livre search API details; recorded in plan.md §6 + D7.
 - [x] 2026-11-05 — Owner answered all open questions: Supabase backend confirmed, Apple SSO deferred, in-app-only alerts, working title "Das Auto" (D13). Plan bumped to v2.1; §10 now "Owner Confirmations".
+- [x] 2026-11-08 — **T1-1 Repo scaffold + CI** (local gates all green: fmt/clippy/test/wasm32/dx-build-web; 5-tab skeleton render verified via CDP; dioxus rsx pitfall recorded as D14; commit `30a404c`). Caveat: GitHub Actions not yet run — no GitHub remote on the repo yet (owner action); CI file is in place per plan.
 
 ## In Progress
-- [ ] 2026-11-05 — **T0-1 Dioxus mobile-target spike** (interrupted mid-task; see handoff below).
+- [ ] **T0-1 Dioxus mobile-target spike** — iOS leg PASS + Web leg PASS (2026-11-07); **Android leg in progress** (2026-11-08): SDK + AVD + emulator ready, NDK r27c downloading → build → install → screencap → D9 appendix.
 
 ## T0-1 HANDOFF — for the agent resuming this task
 
@@ -97,8 +109,10 @@ Re-run to see full text: `cd /Users/bruno/git/das-auto-spike/spike && cargo chec
 
 ## Next Steps
 - [x] 2026-11-05 — Owner confirmed open questions (plan.md §10). Nothing left blocking delegation except company/CNPJ at T3-2.
-- [ ] Delegate **T0-1** to an agent with: plan.md §7 task block + rules.md. → **IN PROGRESS** (handoff above; resume from "Suggested execution order" step 1).
-- [ ] On T0-1 completion: update decisions.md D9 with spike findings, then delegate T1-1.
+- [x] 2026-11-08 — T1-1 scaffold + local gates + commit (see checkpoint above).
+- [ ] T0-1 Android leg (NDK download → build → install → screencap → D9 appendix; details in 2026-11-08 checkpoint).
+- [ ] T1-2 domain model + local storage (details in 2026-11-08 checkpoint).
+- [ ] Owner: push repo to a GitHub remote so the CI in `.github/workflows/ci.yml` can run (non-blocking locally).
 
 ## Issues / Notes
 - Earlier `rules.md` write landed in a stray path `/Users/bruno/s/Users/bruno/plans/rules.md` (malformed path from a prior session). The correct file now lives at `/Users/bruno/plans/rules.md`. The stray dir `/Users/bruno/s` is junk (contains only that file + .DS_Store) and should be deleted by the owner.
