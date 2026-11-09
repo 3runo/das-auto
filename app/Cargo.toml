@@ -19,6 +19,6 @@ dasauto-net = { path = "../crates/net" }
 
 [features]
 default = ["mobile"]
-web = ["dioxus/web"]
+web = ["dioxus/web", "dasauto-net/wasm"]
 desktop = ["dioxus/desktop"]
 mobile = ["dioxus/mobile"]
