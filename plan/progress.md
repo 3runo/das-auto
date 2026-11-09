@@ -1,8 +1,24 @@
 # Progress Log
 
 ## Status
-- **Phase:** Phase 1 — **T1-1 done locally (all gates green, committed); T0-1 Android leg finishing (NDK downloading → emulator → install → launch).**
-- **Current task:** finish T0-1 Android leg (append to D9), then **T1-2** (domain model + local storage).
+- **Phase:** Phase 1 — **T1-1 done (committed `30a404c`); T1-2 done (committed `ee5477d`, all gates green).** T0-1 Android leg still open (spike).
+- **Current task:** **T1-3** (Supabase auth + vehicle registry + Home) — needs a Supabase project (URL + anon key) from the owner; see Next Steps. T0-1 Android leg in parallel when the emulator is ready.
+
+### Session checkpoint 2026-11-09 (agent — T1-2 completed & committed)
+- **T1-2 DONE:** domain model + local storage layer in the real repo (`/Users/bruno/git/das-auto`):
+  - `core::entities` — Vehicle/Expense/Document/Deadline/SavedPartsSearch (centavos `i64`), enums, `ValidationError` with pt-BR messages.
+  - `core::money` — added `Money::parse`: strict pt-BR parsing (dot = thousands separator *only*, comma = decimal, `R$` prefix, optional sign, 1–2 decimal digits; malformed/ambiguous/overflow rejected — e.g. `12.34` is rejected as ambiguous pt-BR). Round-trips with `format_brl`.
+  - `core::plate` — normalize + validate (Mercosul 7-char + legacy 6-char).
+  - `core::store` — `LocalStore` trait (list/get/upsert/delete per entity, all fallible, `dasauto:*` namespaced keys) + `MemoryStore` fake; `core::sync` — `SyncOp`/`SyncQueue` trait + in-memory impl, LWW `resolve_conflict`, `validate_queue`, `is_data_error`.
+  - `net::store` — `GlooStore` impl, wasm-only behind `#[cfg(feature = "wasm")]` (host tests stay green).
+  - Golden JSON fixtures in `fixtures/` (incl. invalid-plate/invalid-year negatives) + serde round-trip tests.
+  - Gates: `cargo fmt --check` ✓ · `clippy --workspace --all-targets -- -D warnings` ✓ · `cargo test --workspace` ✓ (73 core + 63 net + 8 app) · `cargo check -p dasauto-core -p dasauto-net --target wasm32-unknown-unknown` ✓.
+  - **Committed:** `ee5477d`. Coverage note: "100% of storage/money/plate code" verified by path review against the test list, not by a measured coverage tool.
+- **Next steps (in order):**
+  1. **T1-3** (needs owner input): Supabase project with URL + anon key, then Supabase client in `net`, auth screens, vehicle CRUD + wizard, migrations + RLS from plan.md §4, Home live.
+  2. T0-1 Android leg: NDK r27c (if installed) → `dx build --android` in the spike repo → `adb install` → launch `com.example.spike` → screencap → D9 appendix, then close T0-1.
+  3. Owner: push repo to a GitHub remote so CI can actually run (`.github/workflows/ci.yml` is in place but has never executed).
+- Gates: CI defined in `.github/workflows/ci.yml` (fmt/clippy/test/wasm32/dx-build-web) — unverifiable until repo is pushed to a GitHub remote.
 
 ### Session checkpoint 2026-11-08 (agent — T1-1 verified & committed; T0-1 Android leg unblocked)
 - **T0-1 Android leg unblocked:** previous session's retry 2 actually completed — full SDK installed (platform-tools 37.0.1, platforms;android-36, build-tools;36.0.0, emulator 37.2.13, system-images;android-36;google_apis;arm64-v8a v7). **NDK was still missing** (`dx build --android` demands `ANDROID_NDK_HOME`) — installing `ndk;27.2.12479018` (r27c, latest stable). AVD `spike` (pixel_6, arm64) created; emulator booted headless (`sys.boot_completed=1`, `emulator-5554`).
@@ -53,9 +69,11 @@
 - [x] 2026-11-05 — Researched DETRAN/Denatran API landscape (no public self-service API) and Mercado Livre search API details; recorded in plan.md §6 + D7.
 - [x] 2026-11-05 — Owner answered all open questions: Supabase backend confirmed, Apple SSO deferred, in-app-only alerts, working title "Das Auto" (D13). Plan bumped to v2.1; §10 now "Owner Confirmations".
 - [x] 2026-11-08 — **T1-1 Repo scaffold + CI** (local gates all green: fmt/clippy/test/wasm32/dx-build-web; 5-tab skeleton render verified via CDP; dioxus rsx pitfall recorded as D14; commit `30a404c`). Caveat: GitHub Actions not yet run — no GitHub remote on the repo yet (owner action); CI file is in place per plan.
+- [x] 2026-11-09 — **T1-2 Domain model + local storage layer** (entities + centavos, `Money::parse` pt-BR, plate normalize/validate, `LocalStore` + `MemoryStore` + `GlooStore` (wasm), `SyncQueue` + in-memory impl, golden fixtures; 73 core + 63 net tests green; wasm32 check green; commit `ee5477d`).
 
 ## In Progress
-- [ ] **T0-1 Dioxus mobile-target spike** — iOS leg PASS + Web leg PASS (2026-11-07); **Android leg in progress** (2026-11-08): SDK + AVD + emulator ready, NDK r27c downloading → build → install → screencap → D9 appendix.
+- [ ] **T0-1 Dioxus mobile-target spike** — iOS leg PASS + Web leg PASS (2026-11-07); **Android leg open** (2026-11-08): SDK + AVD + emulator ready, NDK r27c was downloading → build → install → screencap → D9 appendix.
+- [ ] **T1-3 Auth + vehicle registry + Home** — blocked on a Supabase project (URL + anon key) from the owner.
 
 ## T0-1 HANDOFF — for the agent resuming this task
 
@@ -110,8 +128,9 @@ Re-run to see full text: `cd /Users/bruno/git/das-auto-spike/spike && cargo chec
 ## Next Steps
 - [x] 2026-11-05 — Owner confirmed open questions (plan.md §10). Nothing left blocking delegation except company/CNPJ at T3-2.
 - [x] 2026-11-08 — T1-1 scaffold + local gates + commit (see checkpoint above).
-- [ ] T0-1 Android leg (NDK download → build → install → screencap → D9 appendix; details in 2026-11-08 checkpoint).
-- [ ] T1-2 domain model + local storage (details in 2026-11-08 checkpoint).
+- [x] 2026-11-09 — T1-2 domain model + local storage + gates + commit (see checkpoint above).
+- [ ] T1-3 (blocked on owner): Supabase project URL + anon key → then Supabase client in `net`, auth screens, vehicle CRUD + wizard, migrations + RLS (plan.md §4), Home live.
+- [ ] T0-1 Android leg (NDK r27c → `dx build --android` → install → screencap → D9 appendix; details in 2026-11-08 checkpoint).
 - [ ] Owner: push repo to a GitHub remote so the CI in `.github/workflows/ci.yml` can run (non-blocking locally).
 
 ## Issues / Notes
