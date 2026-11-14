@@ -1,4 +1,4 @@
-# Development Rules — Auto Carro (working title)
+# Development Rules — Das Auto (working title)
 
 These rules bind every AI agent and human working on this codebase. An agent that receives a task MUST read this file first, follow it during the task, and finish only when the Definition of Done is satisfied.
 

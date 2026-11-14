@@ -1,0 +1,266 @@
+:root {
+    --bg: #f4f6f8;
+    --card: #ffffff;
+    --ink: #1c2733;
+    --muted: #6b7a8c;
+    --line: #e3e8ee;
+    --accent: #1f6feb;
+    --danger: #d64545;
+    --ok: #2e8b57;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+main {
+    max-width: 560px;
+    margin: 0 auto;
+    padding: 16px 16px 88px;
+}
+
+header h1 {
+    margin: 8px 0 0;
+    font-size: 26px;
+}
+
+.sub {
+    margin: 2px 0 14px;
+    color: var(--muted);
+    font-size: 14px;
+}
+
+.card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px;
+    margin-bottom: 14px;
+}
+
+.card h2 {
+    margin: 0 0 10px;
+    font-size: 18px;
+}
+
+.field-label {
+    display: block;
+    margin: 10px 0 4px;
+    font-size: 13px;
+    color: var(--muted);
+}
+
+.field {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 15px;
+    background: #fff;
+    color: var(--ink);
+}
+
+.hint {
+    color: var(--muted);
+    font-size: 13px;
+    margin: 8px 0;
+}
+
+.error {
+    color: var(--danger);
+    font-size: 13px;
+    margin: 8px 0;
+}
+
+.info {
+    color: var(--ok);
+    font-size: 13px;
+    margin: 8px 0;
+}
+
+.primary {
+    display: block;
+    width: 100%;
+    margin-top: 14px;
+    padding: 12px;
+    border: none;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.primary:disabled {
+    opacity: 0.6;
+}
+
+.secondary {
+    display: block;
+    width: 100%;
+    padding: 11px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    color: var(--ink);
+    font-size: 15px;
+    cursor: pointer;
+}
+
+.danger {
+    padding: 10px 16px;
+    border: none;
+    border-radius: 8px;
+    background: var(--danger);
+    color: #fff;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.link {
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: 14px;
+    padding: 8px 0;
+    cursor: pointer;
+}
+
+.link.danger {
+    color: var(--danger);
+}
+
+.divider {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 14px 0;
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.divider::before,
+.divider::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--line);
+}
+
+.google {
+    display: block;
+    width: 100%;
+    padding: 11px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    color: var(--ink);
+    font-size: 15px;
+    cursor: pointer;
+}
+
+.banner {
+    background: #fdf1e7;
+    border: 1px solid #f0c9a8;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 13px;
+    margin-bottom: 12px;
+}
+
+.confirm-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    font-size: 14px;
+}
+
+.confirm-bar span {
+    flex: 1;
+}
+
+.btn-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 16px;
+}
+
+.btn-row > * {
+    flex: 1;
+}
+
+.plate-badge {
+    display: inline-block;
+    background: #eef2f6;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 1px;
+    font-size: 14px;
+}
+
+.vehicle-card h3 {
+    margin: 0 0 8px;
+    font-size: 16px;
+}
+
+.empty {
+    text-align: center;
+    padding: 32px 18px;
+}
+
+.empty p {
+    color: var(--muted);
+    font-size: 14px;
+}
+
+.tabs {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    background: var(--card);
+    border-top: 1px solid var(--line);
+    padding: 8px 4px calc(8px + env(safe-area-inset-bottom));
+    max-width: 100%;
+}
+
+.tab {
+    flex: 1;
+    background: none;
+    border: none;
+    padding: 6px 4px;
+    font-size: 12px;
+    color: var(--muted);
+    cursor: pointer;
+}
+
+.tab.active {
+    color: var(--accent);
+    font-weight: 700;
+}
+
+.syncing {
+    position: absolute;
+    top: -22px;
+    right: 12px;
+    font-size: 11px;
+    color: var(--muted);
+}

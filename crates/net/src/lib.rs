@@ -1,11 +1,18 @@
-//! Das Auto — network layer (Supabase client, auth, sync).
+//! Das Auto — network layer (plan.md §2).
 //!
-//! Everything here will sit behind traits with in-memory fakes so tests run
-//! on the host and the UI can be developed offline. The real Supabase
-//! client lands in T1-3.
+//! `client` implements the core service traits over Supabase REST
+//! (GoTrue + PostgREST); `oauth` holds the PKCE helpers for the Google flow;
+//! `store` provides the wasm `LocalStore` backend (gloo). Everything is
+//! behind the core traits so the UI and tests can run on in-memory fakes
+//! (rules.md §4).
+
+pub mod client;
+pub mod oauth;
 
 #[cfg(feature = "wasm")]
 pub mod store;
+
+pub use client::SupabaseClient;
 
 #[cfg(test)]
 mod tests {

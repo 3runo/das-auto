@@ -39,6 +39,8 @@ pub mod keys {
     pub const VEHICLES: &str = "dasauto:vehicles";
     /// The Supabase session (raw JSON; used by the net crate in T1-3).
     pub const SESSION: &str = "dasauto:session";
+    /// The pending PKCE verifier for the Google flow (raw string; T1-3).
+    pub const PKCE_VERIFIER: &str = "dasauto:pkce_verifier";
     /// Pending sync ops (JSON array; used by the persistent queue in T2-3).
     pub const SYNC_QUEUE: &str = "dasauto:syncqueue";
 

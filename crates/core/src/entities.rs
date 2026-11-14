@@ -24,6 +24,33 @@ pub enum FuelType {
     Electric,
 }
 
+impl FuelType {
+    /// The pt-BR label the UI shows for a value (used by the wizard select).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FuelType::Gasoline => "Gasolina",
+            FuelType::Ethanol => "Álcool (etanol)",
+            FuelType::Flex => "Flex",
+            FuelType::Diesel => "Diesel",
+            FuelType::Hybrid => "Híbrido",
+            FuelType::Electric => "Elétrico",
+        }
+    }
+
+    /// Parse a label from the UI select (serde value is the lowercase name).
+    pub fn from_str(label: &str) -> Self {
+        match label {
+            "gasoline" => FuelType::Gasoline,
+            "ethanol" => FuelType::Ethanol,
+            "flex" => FuelType::Flex,
+            "diesel" => FuelType::Diesel,
+            "hybrid" => FuelType::Hybrid,
+            "electric" => FuelType::Electric,
+            _ => FuelType::Gasoline,
+        }
+    }
+}
+
 /// Expense categories (SQL: `expenses.category` check constraint).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

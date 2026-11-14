@@ -3,9 +3,17 @@ name = "dasauto-core"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+# In-memory service fakes for unit tests (rules.md §2).
+fakes = []
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-uuid = { version = "1", features = ["serde"] }
+uuid = { version = "1", features = ["serde", "v4", "js"] }
 chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+futures = "0.3"

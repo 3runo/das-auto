@@ -6,6 +6,18 @@ edition = "2021"
 [dependencies]
 dasauto-core = { path = "../core" }
 
+# Supabase REST (GoTrue auth + PostgREST data). The wasm32 fetch backend is
+# automatic in reqwest 0.12 (no `wasm` feature); `rustls-tls` keeps TLS
+# pure-Rust (WebPki roots) so the client compiles for both host and wasm
+# (D17, rules.md §4 — new dep justified).
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# PKCE (S256) for the Google OAuth flow — pure-Rust, both targets (rules.md §4).
+sha2 = "0.10"
+base64 = "0.22"
+
 # Browser storage backend for the LocalStore trait. wasm32-only crate; on
 # other targets the store module compiles to an empty stub (rules.md §4).
 gloo-storage = { version = "0.3", optional = true }
@@ -13,3 +25,8 @@ gloo-storage = { version = "0.3", optional = true }
 [features]
 default = []
 wasm = ["gloo-storage"]
+
+[dev-dependencies]
+futures = "0.3"
+# Re-declared here so `cargo test` unifies the `fakes` feature (rules.md §2).
+dasauto-core = { path = "../core", features = ["fakes"] }
