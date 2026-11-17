@@ -84,7 +84,7 @@ fn wizard_step1(w: &Wizard, on_next: EventHandler<()>, on_cancel: EventHandler<(
                 class: "field",
                 value: fuel.read().as_str(),
                 oninput: move |e| {
-                    fuel.set(FuelType::from_str(&e.value()));
+                    fuel.set(FuelType::from_label(&e.value()));
                 },
                 option { value: "", {i18n::WIZARD_FUEL_EMPTY} }
                 option { value: "gasoline", {i18n::FUEL_GASOLINE} }

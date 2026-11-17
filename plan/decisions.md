@@ -114,7 +114,18 @@ Critical decisions with rationale. Numbered IDs are referenced by `plan.md` and 
 ### D16 — Dioxus 0.8.0-alpha.3 Android template bug: missing `lifecycle-process` + dx regenerates the project (T0-1, 2026-11-09)
 - **Decision:** Until the dioxus version is bumped, every Android build follows this exact flow: (1) `dx build --android` — runs the Rust/NDK phase, then fails at `:app:compileDebugKotlin` with `Unresolved reference 'ProcessLifecycleOwner'`; (2) patch the generated `target/dx/<app>/debug/android/app/app/build.gradle.kts` to add `implementation("androidx.lifecycle:lifecycle-process:2.8.6")`; (3) run `./gradlew :app:assembleDebug` directly inside `target/dx/<app>/debug/android/app`. Do NOT re-run `dx build --android` after patching — **dx regenerates the entire generated Android project tree on every run and wipes local patches.**
 - **Rationale:** The template's `WryActivity.kt` (copied from wry) imports `androidx.lifecycle.ProcessLifecycleOwner` + `.lifecycle` extensions, but the generated `build.gradle.kts` only declares webkit/appcompat/material — no `lifecycle-process`, so the Kotlin compile fails. Upstream context: DioxusLabs/dioxus#5878 (WryActivity lifecycle wiring) and PR #5936 (tao 0.37/wry 0.57 import reshuffle shows template deps tracking wry's Kotlin). Re-verify template deps when the dioxus pin changes — the workaround may become unnecessary (or the wrong dep).
-- **Date:** 2026-11-09.
+|- **Date:** 2026-11-09.
+
+### D17 — T1-2 compile errors fixed in the real workspace (2026-11-14)
+- **Decision:** All compile errors blocking `dx build --ios` / `dx serve --ios` in `/Users/bruno/git/das-auto` are fixed and verified: (1) `core::fakes.rs` `restore_session()` returned `Option<Result<Session, _>>` instead of `Result<Option<Session>, AuthError>` — fixed by mapping the `Option<Session>` to `Ok(session)`; (2) `VehicleService::list/create/remove` dereferenced `MutexGuard` with `*self.xxx.lock().unwrap()` (E0507) — fixed with `&*`; (3) the test `run()` helper required `'static` futures, which the fakes could not satisfy — the helper no longer requires `'static`; (4) added manual `Clone` impls for `FakeAuth`/`FakeVehicles` (they hold `Mutex`, which is not `Clone`); (5) `FuelType::from_str` shadowed the `FromStr` trait method (clippy `should_implement_trait`) — renamed to `from_label`, call sites updated; (6) `net::client.rs:467` `message: msg.into()` was a useless conversion (msg is already a `String`) — removed; (7) removed unused imports (`std::pin::Pin`, `std::future::Future`).
+- **Rationale:** The app must build for iOS (plan.md §3 acceptance); `dx build --ios` and `dx serve --ios` are the acceptance commands.
+- **Verification:** `cargo clippy --workspace --all-targets -- -D warnings` passes for `core`+`net` (the `app` crate still emits ~94 warnings under `-D warnings` — unused consts/functions in test modules, `clone` on `Copy` types, `too_many_arguments` — these are warnings, not compile errors; `dx build --ios` and `dx serve --ios` both succeed).
+- **Date:** 2026-11-14.
+
+### D18 — dx CLI 0.7.10 vs workspace dioxus 0.8.0-alpha.3 (2026-11-14)
+- **Decision:** Keep the version mismatch; do not upgrade. `dx` 0.7.10 is the latest available on crates.io (installing dioxus-cli produces the same 0.7.10). `dx serve --ios` prints a warning ("dx and dioxus versions are incompatible") but still builds and serves the app successfully.
+- **Rationale:** No evidence the mismatch breaks the build; the iOS build and serve both pass. Upgrading would require building dioxus-cli from source, which is out of scope.
+- **Date:** 2026-11-14.
 
 ## Deferred / Open (referenced by plan.md §10)
 - [ ] Bundle id: needs company/CNPJ from owner before T3-2 (candidate `com.<company>.dasauto`).

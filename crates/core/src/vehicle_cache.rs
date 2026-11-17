@@ -37,8 +37,8 @@ impl VehicleCache {
 
     /// Persist the given vehicles (replacing the previous cache).
     pub fn save(&self, user_id: &str, vehicles: &[Vehicle]) -> Result<(), StoreError> {
-        let json =
-            serde_json::to_string(vehicles).map_err(|e| StoreError::Backend(format!("serialize: {e}")))?;
+        let json = serde_json::to_string(vehicles)
+            .map_err(|e| StoreError::Backend(format!("serialize: {e}")))?;
         self.store.set_raw(&Self::key(user_id), &json)
     }
 
@@ -104,7 +104,12 @@ mod tests {
     #[test]
     fn users_are_isolated() {
         let cache = VehicleCache::new(Arc::new(MemoryStore::default()));
-        cache.save(USER_A, std::slice::from_ref(&vehicle(Uuid::new_v4(), USER_A))).unwrap();
+        cache
+            .save(
+                USER_A,
+                std::slice::from_ref(&vehicle(Uuid::new_v4(), USER_A)),
+            )
+            .unwrap();
         assert!(cache.load(USER_B).is_empty());
         assert_eq!(cache.load(USER_A).len(), 1);
     }
@@ -122,7 +127,12 @@ mod tests {
     #[test]
     fn clear_drops_the_cache() {
         let cache = VehicleCache::new(Arc::new(MemoryStore::default()));
-        cache.save(USER_A, std::slice::from_ref(&vehicle(Uuid::new_v4(), USER_A))).unwrap();
+        cache
+            .save(
+                USER_A,
+                std::slice::from_ref(&vehicle(Uuid::new_v4(), USER_A)),
+            )
+            .unwrap();
         cache.clear(USER_A);
         assert!(cache.load(USER_A).is_empty());
     }

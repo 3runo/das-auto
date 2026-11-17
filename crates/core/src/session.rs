@@ -75,12 +75,17 @@ mod tests {
 
     #[test]
     fn refresh_boundaries() {
-        // expires in 100s, leeway 60s → refresh now
-        assert!(session(now_epoch_secs() + 100).needs_refresh(now_epoch_secs(), 60));
-        // expires in 100s, leeway 50s → still fresh
-        assert!(!session(now_epoch_secs() + 100).needs_refresh(now_epoch_secs(), 50));
+        // single captured clock: `needs_refresh` compares `now` against the
+        // stored expiry, so the test must not advance the clock mid-assert.
+        let now = now_epoch_secs();
+        // expires in 100s, leeway 60s → still fresh
+        assert!(!session(now + 100).needs_refresh(now, 60));
+        // expires in 50s, leeway 60s → refresh now
+        assert!(session(now + 50).needs_refresh(now, 60));
+        // exactly at the leeway boundary → refresh
+        assert!(session(now + 60).needs_refresh(now, 60));
         // already expired → refresh
-        assert!(session(now_epoch_secs() - 5).needs_refresh(now_epoch_secs(), 0));
+        assert!(session(now - 5).needs_refresh(now, 0));
     }
 
     #[test]

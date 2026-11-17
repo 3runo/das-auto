@@ -10,10 +10,19 @@
 
 use std::future::Future;
 
-use crate::entities::Vehicle;
+use crate::entities::{Expense, Vehicle};
 use crate::session::{Profile, Session};
 
-/// A boxed 'static future — lets the trait stay object-safe (`Arc<dyn …>`).
+/// A boxed future — lets the trait stay object-safe (`Arc<dyn …>`).
+///
+/// `Send + Sync` are required on native targets: the Dioxus mobile/desktop
+/// runtime is multi-threaded and `spawn`s `Send` tasks. On wasm32 the runtime
+/// is single-threaded and reqwest's fetch backend yields `!Send` futures
+/// (`js_sys::JsFuture` = `Rc<RefCell<…>>`), so the bounds are dropped there
+/// (D17, rules.md §4 — no HTTP client leaks `Send` into the contracts).
+#[cfg(target_arch = "wasm32")]
+pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + 'a>>;
+#[cfg(not(target_arch = "wasm32"))]
 pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + Send + Sync + 'a>>;
 
 /// Errors from the auth service. Message text is never embedded here: the UI
@@ -31,10 +40,7 @@ pub enum AuthError {
     /// The client was built without a backend URL/key (build misconfig).
     Unconfigured,
     /// Anything else the server rejected.
-    Server {
-        status: u16,
-        message: String,
-    },
+    Server { status: u16, message: String },
 }
 
 /// Outcome of email sign-up: Supabase may auto-confirm (session returned) or
@@ -54,12 +60,18 @@ pub enum SignUpOutcome {
 /// (`dasauto:session`) and auto-refreshes tokens near expiry (D17).
 pub trait AuthService: Send + Sync {
     /// Email/password sign-up.
-    fn sign_up_email<'a>(&'a self, email: &'a str, password: &'a str)
-    -> BoxFuture<'a, Result<SignUpOutcome, AuthError>>;
+    fn sign_up_email<'a>(
+        &'a self,
+        email: &'a str,
+        password: &'a str,
+    ) -> BoxFuture<'a, Result<SignUpOutcome, AuthError>>;
 
     /// Email/password sign-in.
-    fn sign_in_email<'a>(&'a self, email: &'a str, password: &'a str)
-    -> BoxFuture<'a, Result<Session, AuthError>>;
+    fn sign_in_email<'a>(
+        &'a self,
+        email: &'a str,
+        password: &'a str,
+    ) -> BoxFuture<'a, Result<Session, AuthError>>;
 
     /// Restore the persisted session (refreshing if near expiry). `Ok(None)`
     /// means "no stored session".
@@ -69,7 +81,11 @@ pub trait AuthService: Send + Sync {
     fn sign_out(&self) -> BoxFuture<'_, Result<(), AuthError>>;
 
     /// Exchange a PKCE `code` (Google OAuth callback) for a session.
-    fn exchange_pkce(&self, code: &str, verifier: &str) -> BoxFuture<'_, Result<Session, AuthError>>;
+    fn exchange_pkce(
+        &self,
+        code: &str,
+        verifier: &str,
+    ) -> BoxFuture<'_, Result<Session, AuthError>>;
 
     /// The currently stored session, if any (restored or in-memory).
     fn stored_session(&self) -> Option<Session>;
@@ -85,7 +101,10 @@ pub enum RepoError {
     NoSession,
     Network,
     Unconfigured,
-    Server { status: u16, message: String },
+    Server {
+        status: u16,
+        message: String,
+    },
 }
 
 impl From<AuthError> for RepoError {
@@ -118,5 +137,21 @@ pub trait VehicleService: Send + Sync {
     fn create(&self, vehicle: Vehicle) -> BoxFuture<'_, Result<Vehicle, RepoError>>;
 
     /// Delete a vehicle by id.
+    fn remove(&self, id: uuid::Uuid) -> BoxFuture<'_, Result<(), RepoError>>;
+}
+
+/// Expense CRUD (PostgREST via `dasauto-net`) — plan.md §7, T2-1.
+///
+/// Same RLS story as `VehicleService`: user scoping is server-side,
+/// methods take no user argument (rules.md §8). `remove` is a soft
+/// delete (D3) — the row keeps its history and disappears from `list`.
+pub trait ExpenseService: Send + Sync {
+    /// All non-deleted expenses for the session user, newest date first.
+    fn list(&self) -> BoxFuture<'_, Result<Vec<Expense>, RepoError>>;
+
+    /// Create an expense. The client pre-generates `id` (offline-ready).
+    fn create(&self, expense: Expense) -> BoxFuture<'_, Result<Expense, RepoError>>;
+
+    /// Delete an expense by id.
     fn remove(&self, id: uuid::Uuid) -> BoxFuture<'_, Result<(), RepoError>>;
 }

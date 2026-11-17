@@ -7,7 +7,7 @@ use crate::appstate::AuthMode;
 use crate::i18n;
 
 #[component]
-pub fn auth_screen(
+pub fn AuthScreen(
     mode: Signal<AuthMode>,
     mut email: Signal<String>,
     mut password: Signal<String>,

@@ -21,9 +21,9 @@
 use std::sync::{Arc, Mutex};
 
 use dasauto_core::api::{
-    AuthError, AuthService, BoxFuture, RepoError, SignUpOutcome, VehicleService,
+    AuthError, AuthService, BoxFuture, ExpenseService, RepoError, SignUpOutcome, VehicleService,
 };
-use dasauto_core::entities::Vehicle;
+use dasauto_core::entities::{Expense, Vehicle};
 use dasauto_core::session::{now_epoch_secs, Profile, Session};
 use dasauto_core::store::LocalStore;
 use serde::de::DeserializeOwned;
@@ -55,6 +55,10 @@ impl SupabaseClient {
         store: Arc<dyn LocalStore>,
     ) -> Self {
         let http = reqwest::Client::builder()
+            // Never hang the UI: bound every request (boot session refresh,
+            // sign-in, vehicle/expense calls) so unreachable backends fail
+            // fast instead of freezing the app on "Inicializando…".
+            .timeout(std::time::Duration::from_secs(15))
             .build()
             .unwrap_or_default();
         Self {
@@ -152,15 +156,16 @@ impl AuthService for SupabaseClient {
         email: &'a str,
         password: &'a str,
     ) -> BoxFuture<'a, Result<SignUpOutcome, AuthError>> {
+        let client = self.clone();
         Box::pin(async move {
-            if !self.is_configured() {
+            if !client.is_configured() {
                 return Err(AuthError::Unconfigured);
             }
-            let url = format!("{}/auth/v1/signup", self.base());
-            let resp = self
+            let url = format!("{}/auth/v1/signup", client.base());
+            let resp = client
                 .http
                 .post(url)
-                .header("apikey", &self.api_key)
+                .header("apikey", &client.api_key)
                 .json(&json!({ "email": email, "password": password }))
                 .send()
                 .await
@@ -175,7 +180,7 @@ impl AuthService for SupabaseClient {
             // required first.
             match parse_session(&body, email) {
                 Some(s) => {
-                    self.set_session(Some(s.clone()));
+                    client.set_session(Some(s.clone()));
                     Ok(SignUpOutcome::Authenticated(s))
                 }
                 None => Ok(SignUpOutcome::ConfirmationSent),
@@ -188,18 +193,16 @@ impl AuthService for SupabaseClient {
         email: &'a str,
         password: &'a str,
     ) -> BoxFuture<'a, Result<Session, AuthError>> {
+        let client = self.clone();
         Box::pin(async move {
-            if !self.is_configured() {
+            if !client.is_configured() {
                 return Err(AuthError::Unconfigured);
             }
-            let url = format!(
-                "{}/auth/v1/token?grant_type=password",
-                self.base()
-            );
-            let resp = self
+            let url = format!("{}/auth/v1/token?grant_type=password", client.base());
+            let resp = client
                 .http
                 .post(url)
-                .header("apikey", &self.api_key)
+                .header("apikey", &client.api_key)
                 .json(&json!({ "email": email, "password": password }))
                 .send()
                 .await
@@ -213,7 +216,7 @@ impl AuthService for SupabaseClient {
                 status,
                 message: "malformed GoTrue session".into(),
             })?;
-            self.set_session(Some(session.clone()));
+            client.set_session(Some(session.clone()));
             Ok(session)
         })
     }
@@ -257,7 +260,11 @@ impl AuthService for SupabaseClient {
         })
     }
 
-    fn exchange_pkce(&self, code: &str, verifier: &str) -> BoxFuture<'_, Result<Session, AuthError>> {
+    fn exchange_pkce(
+        &self,
+        code: &str,
+        verifier: &str,
+    ) -> BoxFuture<'_, Result<Session, AuthError>> {
         // Owned copies: `BoxFuture<'_>` is bound to `&self` only, so the boxed
         // future must not capture the caller's `&str` references.
         let code = code.to_string();
@@ -301,10 +308,7 @@ impl AuthService for SupabaseClient {
 impl VehicleService for SupabaseClient {
     fn list(&self) -> BoxFuture<'_, Result<Vec<Vehicle>, RepoError>> {
         Box::pin(async move {
-            let token = self
-                .valid_token()
-                .await
-                .map_err(RepoError::from)?;
+            let token = self.valid_token().await.map_err(RepoError::from)?;
             let url = format!(
                 "{}/rest/v1/vehicles?select=*&order=created_at.asc",
                 self.base()
@@ -361,21 +365,77 @@ impl VehicleService for SupabaseClient {
     }
 }
 
+impl ExpenseService for SupabaseClient {
+    fn list(&self) -> BoxFuture<'_, Result<Vec<Expense>, RepoError>> {
+        Box::pin(async move {
+            let token = self.valid_token().await.map_err(RepoError::from)?;
+            let url = format!(
+                "{}/rest/v1/expenses?select=*&order=occurred_on.desc",
+                self.base()
+            );
+            let resp = self
+                .http
+                .get(url)
+                .header("apikey", &self.api_key)
+                .bearer_auth(&token)
+                .send()
+                .await
+                .map_err(|_| RepoError::Network)?;
+            read_json(resp).await
+        })
+    }
+
+    fn create(&self, expense: Expense) -> BoxFuture<'_, Result<Expense, RepoError>> {
+        Box::pin(async move {
+            let token = self.valid_token().await.map_err(RepoError::from)?;
+            let url = format!("{}/rest/v1/expenses", self.base());
+            let resp = self
+                .http
+                .post(url)
+                .header("apikey", &self.api_key)
+                .bearer_auth(&token)
+                .header("Prefer", "return=representation")
+                .json(&expense_payload(&expense))
+                .send()
+                .await
+                .map_err(|_| RepoError::Network)?;
+            read_json(resp).await
+        })
+    }
+
+    fn remove(&self, id: dasauto_core::Uuid) -> BoxFuture<'_, Result<(), RepoError>> {
+        Box::pin(async move {
+            let token = self.valid_token().await.map_err(RepoError::from)?;
+            let url = format!("{}/rest/v1/expenses?id=eq.{id}", self.base());
+            let resp = self
+                .http
+                .delete(url)
+                .header("apikey", &self.api_key)
+                .bearer_auth(&token)
+                .send()
+                .await
+                .map_err(|_| RepoError::Network)?;
+            let status = resp.status().as_u16();
+            if !(200..300).contains(&status) {
+                let body: Value = resp.json().await.unwrap_or(Value::Null);
+                return Err(postgrest_error(status, &body));
+            }
+            Ok(())
+        })
+    }
+}
+
 /// Parse a 2xx JSON body, or a typed error otherwise.
-async fn read_json<T: DeserializeOwned + Send>(
-    resp: reqwest::Response,
-) -> Result<T, RepoError> {
+async fn read_json<T: DeserializeOwned + Send>(resp: reqwest::Response) -> Result<T, RepoError> {
     let status = resp.status().as_u16();
     if !(200..300).contains(&status) {
         let body: Value = resp.json().await.unwrap_or(Value::Null);
         return Err(postgrest_error(status, &body));
     }
-    resp.json::<T>()
-        .await
-        .map_err(|_| RepoError::Server {
-            status,
-            message: "malformed response".into(),
-        })
+    resp.json::<T>().await.map_err(|_| RepoError::Server {
+        status,
+        message: "malformed response".into(),
+    })
 }
 
 /// Map a PostgREST error body to `RepoError` (message kept for logs only —
@@ -409,6 +469,24 @@ fn vehicle_payload(v: &Vehicle) -> Value {
     })
 }
 
+/// Extract the payload sent to PostgREST for a new expense.
+///
+/// `user_id` is intentionally omitted (the server sets it from the JWT via
+/// trigger/RLS — rules.md §8), as are `created_at`/`updated_at`.
+fn expense_payload(e: &Expense) -> Value {
+    json!({
+        "id": e.id,
+        "vehicle_id": e.vehicle_id,
+        "category": e.category,
+        "title": e.title,
+        "amount_cents": e.amount_cents,
+        "occurred_on": e.occurred_on,
+        "odometer_km": e.odometer_km,
+        "location": e.location,
+        "notes": e.notes,
+    })
+}
+
 /// Parse a GoTrue session object (`access_token` + `refresh_token` + `user`).
 ///
 /// Tolerant of field drift between GoTrue versions: `user.email` falls back
@@ -424,14 +502,11 @@ fn parse_session(body: &Value, email_hint: &str) -> Option<Session> {
         .and_then(Value::as_str)
         .unwrap_or(email_hint)
         .to_string();
-    let expires_at = body
-        .get("expires_at")
-        .and_then(Value::as_i64)
-        .or_else(|| {
-            body.get("expires_in")
-                .and_then(Value::as_i64)
-                .map(|in_secs| now_epoch_secs() + in_secs)
-        })?;
+    let expires_at = body.get("expires_at").and_then(Value::as_i64).or_else(|| {
+        body.get("expires_in")
+            .and_then(Value::as_i64)
+            .map(|in_secs| now_epoch_secs() + in_secs)
+    })?;
     Some(Session {
         access_token,
         refresh_token,
@@ -458,8 +533,10 @@ fn classify_auth_error(status: u16, body: &Value) -> AuthError {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_lowercase();
-    let bad_credentials =
-        code == "invalid_credentials" || code == "email_not_confirmed" || msg.contains("invalid login credentials") || msg.contains("email not confirmed");
+    let bad_credentials = code == "invalid_credentials"
+        || code == "email_not_confirmed"
+        || msg.contains("invalid login credentials")
+        || msg.contains("email not confirmed");
     let refresh_dead = code.contains("refresh_token") || code.contains("refresh token");
     let email_exists = code == "email_exists"
         || msg.contains("already registered")
@@ -473,7 +550,7 @@ fn classify_auth_error(status: u16, body: &Value) -> AuthError {
     } else {
         AuthError::Server {
             status,
-            message: msg.into(),
+            message: msg,
         }
     }
 }
@@ -481,10 +558,9 @@ fn classify_auth_error(status: u16, body: &Value) -> AuthError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dasauto_core::entities::FuelType;
+    use dasauto_core::entities::{ExpenseCategory, FuelType};
     use dasauto_core::store::MemoryStore;
-    use dasauto_core::Utc;
-    use dasauto_core::Uuid;
+    use dasauto_core::{NaiveDate, Utc, Uuid};
 
     fn vehicle() -> Vehicle {
         Vehicle {
@@ -515,17 +591,15 @@ mod tests {
         let s = Arc::new(MemoryStore::default());
         assert!(!SupabaseClient::new(Some("https://x".into()), None, s.clone()).is_configured());
         assert!(!SupabaseClient::new(None, Some("key".into()), s.clone()).is_configured());
-        assert!(SupabaseClient::new(Some("https://x".into()), Some("key".into()), s).is_configured());
+        assert!(
+            SupabaseClient::new(Some("https://x".into()), Some("key".into()), s).is_configured()
+        );
     }
 
     #[test]
     fn session_persists_through_the_store() {
         let store: Arc<dyn LocalStore> = Arc::new(MemoryStore::default());
-        let c = SupabaseClient::new(
-            Some("https://x".into()),
-            Some("key".into()),
-            store.clone(),
-        );
+        let c = SupabaseClient::new(Some("https://x".into()), Some("key".into()), store.clone());
         let s = Session {
             access_token: "at".into(),
             refresh_token: "rt".into(),
@@ -536,11 +610,7 @@ mod tests {
         c.set_session(Some(s.clone()));
         assert_eq!(c.stored_session(), Some(s.clone()));
         // A fresh client over the same store restores from persistence.
-        let c2 = SupabaseClient::new(
-            Some("https://x".into()),
-            Some("key".into()),
-            store,
-        );
+        let c2 = SupabaseClient::new(Some("https://x".into()), Some("key".into()), store);
         assert_eq!(c2.stored_session(), Some(s));
     }
 
@@ -548,11 +618,7 @@ mod tests {
     fn corrupt_persisted_session_is_treated_as_missing() {
         let store: Arc<dyn LocalStore> = Arc::new(MemoryStore::default());
         store.set_raw(SESSION_KEY, "{ nope").unwrap();
-        let c = SupabaseClient::new(
-            Some("https://x".into()),
-            Some("key".into()),
-            store,
-        );
+        let c = SupabaseClient::new(Some("https://x".into()), Some("key".into()), store);
         assert_eq!(c.stored_session(), None);
     }
 
@@ -571,8 +637,7 @@ mod tests {
 
     #[test]
     fn parse_session_from_gotrue_shape() {
-        let s = parse_session(&gotrue_session_json(Some(1_900_000_000)), "")
-            .expect("should parse");
+        let s = parse_session(&gotrue_session_json(Some(1_900_000_000)), "").expect("should parse");
         assert_eq!(s.access_token, "at");
         assert_eq!(s.refresh_token, "rt");
         assert_eq!(s.expires_at, 1_900_000_000);
@@ -631,10 +696,7 @@ mod tests {
             AuthError::BadCredentials
         );
         assert_eq!(
-            classify_auth_error(
-                400,
-                &json!({ "error": "Invalid login credentials" })
-            ),
+            classify_auth_error(400, &json!({ "error": "Invalid login credentials" })),
             AuthError::BadCredentials
         );
     }
@@ -670,6 +732,41 @@ mod tests {
         assert_eq!(p["id"], json!(v.id));
         assert_eq!(p["make"], json!("VW"));
         assert_eq!(p["fuel_type"], json!("gasoline"));
+        assert!(p.get("user_id").is_none(), "RLS sets user_id server-side");
+        assert!(p.get("created_at").is_none());
+        assert!(p.get("updated_at").is_none());
+    }
+
+    fn expense() -> Expense {
+        Expense {
+            id: Uuid::new_v4(),
+            vehicle_id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            category: ExpenseCategory::Fuel,
+            title: "Tanque cheio".into(),
+            amount_cents: 250_000,
+            occurred_on: NaiveDate::from_ymd_opt(2026, 11, 24).unwrap(),
+            odometer_km: Some(87_450),
+            location: Some("Posto Ipiranga — BR-101".into()),
+            notes: None,
+            deleted_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn expense_payload_omits_user_and_timestamps() {
+        let e = expense();
+        let p = expense_payload(&e);
+        assert_eq!(p["id"], json!(e.id));
+        assert_eq!(p["vehicle_id"], json!(e.vehicle_id));
+        assert_eq!(p["category"], json!("fuel"));
+        assert_eq!(p["title"], json!("Tanque cheio"));
+        assert_eq!(p["amount_cents"], json!(250_000));
+        assert_eq!(p["occurred_on"], json!("2026-11-24"));
+        assert_eq!(p["odometer_km"], json!(87_450));
+        assert_eq!(p["location"], json!("Posto Ipiranga — BR-101"));
         assert!(p.get("user_id").is_none(), "RLS sets user_id server-side");
         assert!(p.get("created_at").is_none());
         assert!(p.get("updated_at").is_none());

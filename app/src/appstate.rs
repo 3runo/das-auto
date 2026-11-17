@@ -15,13 +15,14 @@ use std::sync::Arc;
 
 use dioxus::prelude::*;
 
-use dasauto_core::api::{
-    AuthError, AuthService, RepoError, SignUpOutcome, VehicleService,
-};
-use dasauto_core::entities::{FuelType, Vehicle};
+use dasauto_core::api::{AuthError, RepoError, VehicleService};
+use dasauto_core::entities::{ExpenseCategory, FuelType, Vehicle};
 use dasauto_core::session::{Profile, Session};
-use dasauto_core::store::{keys, LocalStore, MemoryStore};
+use dasauto_core::store::{keys, LocalStore};
+#[cfg(not(target_arch = "wasm32"))]
+use dasauto_core::store::MemoryStore;
 use dasauto_core::vehicle_cache::VehicleCache;
+use dasauto_core::Local;
 use dasauto_net::SupabaseClient;
 
 use crate::i18n;
@@ -29,18 +30,28 @@ use crate::i18n;
 /// PKCE verifier key (single source: `core::store::keys`; D13 namespace).
 pub const PKCE_STORAGE_KEY: &str = keys::PKCE_VERIFIER;
 /// Path the Google OAuth flow redirects back to (raw-code capture; T1-3).
+/// Kept as the documented single source for the callback path until the
+/// redirect wires it in (T1-3); not referenced from Rust code yet.
+#[allow(dead_code)]
 pub const OAUTH_CALLBACK_PATH: &str = "/das-auto";
 
 /// Concrete backend: real Supabase client + on-device stores.
 ///
-/// `auth` and `vehicles` are the same client (GoTrue + PostgREST share the
-/// session); they are separate fields so the UI binds each service by name.
+/// `auth`, `vehicles` and `expenses` are the same client (GoTrue + PostgREST
+/// share the session); they are separate fields so the UI binds each
+/// service by name.
 pub struct AppBackend {
     pub store: Arc<dyn LocalStore>,
     pub auth: Arc<SupabaseClient>,
     pub vehicles: Arc<SupabaseClient>,
+    pub expenses: Arc<SupabaseClient>,
     pub cache: Arc<VehicleCache>,
     pub configured: bool,
+    /// Whether the on-device store already holds a persisted session
+    /// (checked synchronously in `make`). The first paint uses this to
+    /// pick the initial stage without waiting on an async task: only a
+    /// persisted session needs the splash → restore → home path.
+    pub has_saved_session: bool,
     pub base_url: String,
     pub publishable_key: String,
 }
@@ -50,8 +61,9 @@ impl AppBackend {
     pub fn make() -> Self {
         let store = make_store();
         let base_url = option_env!("SUPABASE_URL").unwrap_or_default().to_string();
-        let publishable_key =
-            option_env!("SUPABASE_PUBLISHABLE_KEY").unwrap_or_default().to_string();
+        let publishable_key = option_env!("SUPABASE_PUBLISHABLE_KEY")
+            .unwrap_or_default()
+            .to_string();
         let configured = !base_url.is_empty() && !publishable_key.is_empty();
         let auth = if configured {
             Arc::new(SupabaseClient::new(
@@ -63,12 +75,19 @@ impl AppBackend {
             Arc::new(SupabaseClient::new(None, None, store.clone()))
         };
         let cache = Arc::new(VehicleCache::new(store.clone()));
+        // Synchronous: the first paint must not wait on an async task
+        // (the 0.8-alpha mobile runtime can leave spawned tasks pending,
+        // which froze the app on the splash). Only a persisted session
+        // needs the async restore path.
+        let has_saved_session = matches!(store.get_raw(keys::SESSION), Ok(Some(_)));
         Self {
             store,
             auth: auth.clone(),
             vehicles: auth.clone(),
+            expenses: auth,
             cache,
             configured,
+            has_saved_session,
             base_url,
             publishable_key,
         }
@@ -81,8 +100,10 @@ impl Clone for AppBackend {
             store: self.store.clone(),
             auth: self.auth.clone(),
             vehicles: self.vehicles.clone(),
+            expenses: self.expenses.clone(),
             cache: self.cache.clone(),
             configured: self.configured,
+            has_saved_session: self.has_saved_session,
             base_url: self.base_url.clone(),
             publishable_key: self.publishable_key.clone(),
         }
@@ -92,10 +113,12 @@ impl Clone for AppBackend {
 impl PartialEq for AppBackend {
     fn eq(&self, other: &Self) -> bool {
         self.configured == other.configured
+            && self.has_saved_session == other.has_saved_session
             && self.base_url == other.base_url
             && Arc::ptr_eq(&self.store, &other.store)
             && Arc::ptr_eq(&self.auth, &other.auth)
             && Arc::ptr_eq(&self.vehicles, &other.vehicles)
+            && Arc::ptr_eq(&self.expenses, &other.expenses)
             && Arc::ptr_eq(&self.cache, &other.cache)
             && self.publishable_key == other.publishable_key
     }
@@ -149,6 +172,8 @@ impl Tab {
 #[derive(Debug, Clone)]
 pub enum Banner {
     /// Built without Supabase env vars — all network actions are disabled.
+    /// Shown at boot when `!backend.configured` (wired in T1-3); pending.
+    #[allow(dead_code)]
     Unconfigured,
     /// Background refresh failed; stale cache data stays on screen (D11).
     SyncFailed(String),
@@ -215,8 +240,59 @@ pub fn use_wizard() -> Wizard {
     use_hook(Wizard::new)
 }
 
+/// Today as `AAAA-MM-DD` — the expense form's default date (plan §5.2).
+pub fn today_input() -> String {
+    Local::now().date_naive().to_string()
+}
+
+/// Expense form state (T2-1). Fields are text until saved; validation happens
+/// in the App handler so the entity's rules stay in `dasauto-core`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExpenseForm {
+    pub category: Signal<ExpenseCategory>,
+    pub title: Signal<String>,
+    pub amount: Signal<String>,
+    pub date: Signal<String>,
+    pub odometer: Signal<String>,
+    pub location: Signal<String>,
+    pub error: Signal<Option<String>>,
+    pub busy: Signal<bool>,
+}
+
+impl ExpenseForm {
+    pub(crate) fn new() -> Self {
+        Self {
+            category: Signal::new(ExpenseCategory::Fuel),
+            title: Signal::new(String::new()),
+            amount: Signal::new(String::new()),
+            date: Signal::new(today_input()),
+            odometer: Signal::new(String::new()),
+            location: Signal::new(String::new()),
+            error: Signal::new(None),
+            busy: Signal::new(false),
+        }
+    }
+
+    /// Clears the fields but keeps the category; the date goes back to today.
+    pub fn reset(&mut self) {
+        self.title.set(String::new());
+        self.amount.set(String::new());
+        self.date.set(today_input());
+        self.odometer.set(String::new());
+        self.location.set(String::new());
+        self.error.set(None);
+        self.busy.set(false);
+    }
+}
+
+/// Stable expense-form state for the app lifetime.
+pub fn use_expense_form() -> ExpenseForm {
+    use_hook(ExpenseForm::new)
+}
+
 /// Enters the logged-in stage: paints the vehicle cache immediately, then
 /// refreshes from Supabase in the background (T1-3 load sequence).
+#[allow(clippy::too_many_arguments)]
 pub fn enter_home(
     backend: &AppBackend,
     session: Session,
@@ -244,9 +320,7 @@ pub fn enter_home(
                 if cache.save(&user_id, &rows).is_err() {
                     // Refresh succeeded; persisting the cache failed. Rare;
                     // surface it but keep the fresh rows on screen.
-                    banner.set(Some(Banner::SyncFailed(
-                        i18n::ERR_OFFLINE.to_string(),
-                    )));
+                    banner.set(Some(Banner::SyncFailed(i18n::ERR_OFFLINE.to_string())));
                 }
                 vehicles.set(rows);
             }
@@ -263,14 +337,6 @@ pub fn enter_home(
     });
 }
 
-/// Consumes a pending PKCE callback in `localStorage` (set by the OAuth
-/// redirect). Returns `None` when the key is absent or the store errors.
-pub fn take_pkce_callback(store: &Arc<dyn LocalStore>) -> Option<String> {
-    let raw = store.get_raw(PKCE_STORAGE_KEY).ok()??;
-    let value: String = serde_json::from_str(&raw).unwrap_or_default();
-    let _ = store.remove_raw(PKCE_STORAGE_KEY);
-    Some(value)
-}
 
 /// Maps an `AuthError` to a pt-BR user-facing string (T1-3).
 pub fn auth_error_text(e: &AuthError) -> String {

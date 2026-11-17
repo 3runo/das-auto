@@ -4,28 +4,24 @@
 //!
 //! Behind the `fakes` cargo feature so production builds never compile them.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Mutex;
 
 use uuid::Uuid;
 
-use crate::api::{
-    AuthError, AuthService, BoxFuture, RepoError, SignUpOutcome, VehicleService,
-};
+use crate::api::{AuthError, AuthService, BoxFuture, RepoError, SignUpOutcome, VehicleService};
 use crate::entities::Vehicle;
 use crate::session::{Profile, Session};
 
 /// A ready-made boxed future — no executor needed to run a fake.
-fn ready<'a, T>(value: T) -> BoxFuture<'a, T> {
-    Pin::Box::new(std::future::ready(value))
+fn ready<'a, T: std::marker::Send + std::marker::Sync + 'a>(value: T) -> BoxFuture<'a, T> {
+    Box::pin(std::future::ready(value))
 }
 
 /// Deterministic `AuthService` for tests.
 ///
 /// Unset fields fall back to `None`/empty (no session), so a test controls
 /// exactly what each call returns.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct FakeAuth {
     pub stored: Mutex<Option<Session>>,
     pub sign_up: Mutex<Option<Result<SignUpOutcome, AuthError>>>,
@@ -33,6 +29,19 @@ pub struct FakeAuth {
     pub restore: Mutex<Option<Result<Option<Session>, AuthError>>>,
     pub sign_out_err: Mutex<Option<AuthError>>,
     pub pkce: Mutex<Option<Result<Session, AuthError>>>,
+}
+
+impl Clone for FakeAuth {
+    fn clone(&self) -> Self {
+        Self {
+            stored: Mutex::new(self.stored.lock().unwrap().clone()),
+            sign_up: Mutex::new(self.sign_up.lock().unwrap().clone()),
+            sign_in: Mutex::new(self.sign_in.lock().unwrap().clone()),
+            restore: Mutex::new(self.restore.lock().unwrap().clone()),
+            sign_out_err: Mutex::new(self.sign_out_err.lock().unwrap().clone()),
+            pkce: Mutex::new(self.pkce.lock().unwrap().clone()),
+        }
+    }
 }
 
 impl FakeAuth {
@@ -84,7 +93,7 @@ impl AuthService for FakeAuth {
         let explicit = self.restore.lock().unwrap().clone();
         match explicit {
             Some(r) => ready(r),
-            None => ready(self.stored.lock().unwrap().clone().map(Ok)),
+            None => ready(Ok(self.stored.lock().unwrap().clone())),
         }
     }
 
@@ -94,7 +103,11 @@ impl AuthService for FakeAuth {
         ready(err.map(Err).unwrap_or(Ok(())))
     }
 
-    fn exchange_pkce(&self, _code: &str, _verifier: &str) -> BoxFuture<'_, Result<Session, AuthError>> {
+    fn exchange_pkce(
+        &self,
+        _code: &str,
+        _verifier: &str,
+    ) -> BoxFuture<'_, Result<Session, AuthError>> {
         let r = self.pkce.lock().unwrap().clone();
         match r {
             Some(result) => ready(result),
@@ -120,7 +133,7 @@ impl AuthService for FakeAuth {
 /// `create` appends to `rows` (offline-first: local write then server);
 /// `remove` filters by id. Error fields, when set, override the default
 /// success behavior.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct FakeVehicles {
     pub rows: Mutex<Vec<Vehicle>>,
     pub list_err: Mutex<Option<RepoError>>,
@@ -129,17 +142,29 @@ pub struct FakeVehicles {
     pub last_payload: Mutex<Option<Vehicle>>,
 }
 
+impl Clone for FakeVehicles {
+    fn clone(&self) -> Self {
+        Self {
+            rows: Mutex::new(self.rows.lock().unwrap().clone()),
+            list_err: Mutex::new(self.list_err.lock().unwrap().clone()),
+            create_err: Mutex::new(self.create_err.lock().unwrap().clone()),
+            remove_err: Mutex::new(self.remove_err.lock().unwrap().clone()),
+            last_payload: Mutex::new(self.last_payload.lock().unwrap().clone()),
+        }
+    }
+}
+
 impl VehicleService for FakeVehicles {
     fn list(&self) -> BoxFuture<'_, Result<Vec<Vehicle>, RepoError>> {
-        if let Some(e) = *self.list_err.lock().unwrap() {
-            return ready(Err(e));
+        if let Some(e) = &*self.list_err.lock().unwrap() {
+            return ready(Err(e.clone()));
         }
         ready(Ok(self.rows.lock().unwrap().clone()))
     }
 
     fn create(&self, vehicle: Vehicle) -> BoxFuture<'_, Result<Vehicle, RepoError>> {
-        if let Some(e) = *self.create_err.lock().unwrap() {
-            return ready(Err(e));
+        if let Some(e) = &*self.create_err.lock().unwrap() {
+            return ready(Err(e.clone()));
         }
         *self.last_payload.lock().unwrap() = Some(vehicle.clone());
         self.rows.lock().unwrap().push(vehicle.clone());
@@ -147,8 +172,8 @@ impl VehicleService for FakeVehicles {
     }
 
     fn remove(&self, id: Uuid) -> BoxFuture<'_, Result<(), RepoError>> {
-        if let Some(e) = *self.remove_err.lock().unwrap() {
-            return ready(Err(e));
+        if let Some(e) = &*self.remove_err.lock().unwrap() {
+            return ready(Err(e.clone()));
         }
         self.rows.lock().unwrap().retain(|v| v.id != id);
         ready(Ok(()))
@@ -161,7 +186,7 @@ mod tests {
 
     fn run<F, T>(fut: F) -> T
     where
-        F: Future<Output = T> + 'static,
+        F: std::future::Future<Output = T>,
     {
         futures::executor::block_on(fut)
     }
@@ -187,7 +212,7 @@ mod tests {
     fn auth_defaults_and_overrides() {
         let f = FakeAuth::default();
         // unset → defaults
-        let s = run(f.sign_in_email("a@b.c", "x")).unwrap();
+        let _s = run(f.sign_in_email("a@b.c", "x")).unwrap();
         assert_eq!(f.current_profile().unwrap().email, "user@teste.com");
         // explicit override
         *f.sign_in.lock().unwrap() = Some(Err(AuthError::BadCredentials));

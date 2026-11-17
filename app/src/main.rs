@@ -11,29 +11,203 @@ mod i18n;
 mod wizard;
 
 use appstate::*;
-use appstate::{AppBackend, use_wizard, PKCE_STORAGE_KEY};
+use appstate::{use_wizard, AppBackend, PKCE_STORAGE_KEY};
 use auth::*;
-use home::home_screen;
+use dasauto_core::api::{AuthService, VehicleService};
+use dasauto_core::entities::{Expense, FuelType, Vehicle};
+use dasauto_core::session::Profile;
+#[cfg(target_arch = "wasm32")]
+use dasauto_core::store::LocalStore;
+#[cfg(target_arch = "wasm32")]
 use std::sync::Arc;
-use dasauto_core::api::{
-    AuthError, AuthService, RepoError, SignUpOutcome, VehicleService,
-};
-use dasauto_core::entities::{FuelType, Vehicle};
-use dasauto_core::session::{Profile, Session};
-use dasauto_core::store::{keys, LocalStore, MemoryStore};
-use dasauto_core::vehicle_cache::VehicleCache;
 use dasauto_core::Uuid;
-use dasauto_net::SupabaseClient;
 use dioxus::prelude::*;
+use home::HomeScreen;
+use wizard::wizard_screen;
 
 #[cfg(target_arch = "wasm32")]
 use web_sys;
 
+#[allow(dead_code)]
 const FAVICON: Asset = asset!("/assets/favicon.ico");
+#[allow(dead_code)]
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 
 fn main() {
     dioxus::launch(App);
+}
+
+/// Parses the amount input per plan §4.1: up to 6 significant digits and up
+/// to 2 decimals; ',' and '.' both accepted as the decimal separator; an
+/// optional leading `R$` is ignored. Returns cents on success, or the
+/// pt-BR validation message on failure.
+fn parse_money(raw: &str) -> Result<i64, String> {
+    let err = i18n::EXP_ERR_AMOUNT.to_string();
+    let mut text = raw.trim().to_string();
+    for prefix in ["R$", "$"] {
+        if let Some(stripped) = text.strip_prefix(prefix) {
+            text = stripped.trim().to_string();
+            break;
+        }
+    }
+    let (int, frac) = match text.find(|c: char| c == ',' || c == '.') {
+        Some(pos) => (&text[..pos], &text[pos + 1..]),
+        None => (text.as_str(), ""),
+    };
+    let int = int.replace(' ', "");
+    if int.is_empty() || !int.chars().all(|c| c.is_ascii_digit()) {
+        return Err(err);
+    }
+    if frac.chars().any(|c| !c.is_ascii_digit() && c != ' ') {
+        return Err(err);
+    }
+    let frac_digits: String = frac.chars().filter(|c| c.is_ascii_digit()).collect();
+    if frac_digits.len() > 2 {
+        return Err(err);
+    }
+    let padded = format!(
+        "{}{:>2}",
+        frac_digits,
+        "00".chars().take(2 - frac_digits.len().min(2)).collect::<String>()
+    )
+    .trim_end()
+    .to_string();
+    let value = format!("{int}{padded}");
+    if value.len() > 6 {
+        return Err(err);
+    }
+    value.parse::<i64>().map_err(|_| err)
+}
+
+/// Saves a new expense (T2-1): client-generated id (D3), then the list
+/// refreshes from Supabase so the new row shows up everywhere.
+fn save_expense(
+    app: AppBackend,
+    mut form: ExpenseForm,
+    profile: Signal<Option<Profile>>,
+    vehicles: Signal<Vec<Vehicle>>,
+    expenses: Signal<Vec<Expense>>,
+    banner: Signal<Option<Banner>>,
+) {
+    let category = (form.category)();
+    let title = form.title.read().trim().to_string();
+    let amount = form.amount.read().to_string();
+    let date = form.date.read().to_string();
+    let odometer = form.odometer.read().trim().to_string();
+    let location = form.location.read().trim().to_string();
+    form.error.set(None);
+
+    if title.is_empty() {
+        form.error.set(Some(i18n::EXP_ERR_TITLE.to_string()));
+        return;
+    }
+    let cents = match parse_money(&amount) {
+        Ok(c) if c > 0 => c,
+        _ => {
+            form.error.set(Some(i18n::EXP_ERR_AMOUNT.to_string()));
+            return;
+        }
+    };
+    let occurred_on = match dasauto_core::NaiveDate::parse_from_str(&date, "%Y-%m-%d") {
+        Ok(d) => d,
+        Err(_) => {
+            form.error.set(Some(i18n::EXP_ERR_DATE.to_string()));
+            return;
+        }
+    };
+    let odometer_km = match odometer.as_str() {
+        "" => None,
+        s => match s.parse::<i32>() {
+            Ok(km) if (0..=3_000_000).contains(&km) => Some(km),
+            _ => {
+                form.error.set(Some(i18n::EXP_ERR_ODOMETER.to_string()));
+                return;
+            }
+        },
+    };
+    let user_id: Uuid = match profile.read().as_ref() {
+        Some(p) => p.id.parse().unwrap_or_else(|_| Uuid::new_v4()),
+        None => {
+            form.error.set(Some("Sessão encerrada — entre novamente".to_string()));
+            return;
+        }
+    };
+    let vehicle_id = match vehicles.read().first() {
+        Some(v) => v.id,
+        None => {
+            form.error.set(Some("Cadastre um veículo primeiro".to_string()));
+            return;
+        }
+    };
+
+    form.busy.set(true);
+    let svc = app.expenses.clone();
+    let id = Uuid::new_v4();
+    spawn(async move {
+        let now = dasauto_core::Utc::now();
+        let expense = Expense {
+            id,
+            vehicle_id,
+            user_id,
+            category,
+            title,
+            amount_cents: cents,
+            occurred_on,
+            odometer_km,
+            location: if location.is_empty() { None } else { Some(location) },
+            notes: None,
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        match dasauto_core::api::ExpenseService::create(svc.as_ref(), expense).await {
+            Ok(_) => {
+                form.reset();
+                load_expenses(app, expenses, banner);
+            }
+            Err(e) => {
+                form.busy.set(false);
+                form.error.set(Some(repo_error_text(&e)));
+            }
+        }
+    });
+}
+
+/// Deletes an expense and refreshes the list (confirm bar/toast land in T2-3;
+/// this exploratory build deletes straight away).
+fn delete_expense(
+    app: AppBackend,
+    expenses: Signal<Vec<Expense>>,
+    banner: Signal<Option<Banner>>,
+    id: Uuid,
+) {
+    let svc = app.expenses.clone();
+    spawn(async move {
+        if dasauto_core::api::ExpenseService::remove(svc.as_ref(), id).await.is_ok() {
+            load_expenses(app, expenses, banner);
+        }
+    });
+}
+
+/// Fetches every expense for the signed-in user (RLS scopes it server-side);
+/// non-deleted rows replace the list signal. Errors surface via the banner
+/// instead of failing silently (D3).
+fn load_expenses(
+    app: AppBackend,
+    mut expenses: Signal<Vec<Expense>>,
+    mut banner: Signal<Option<Banner>>,
+) {
+    let svc = app.expenses.clone();
+    spawn(async move {
+        match dasauto_core::api::ExpenseService::list(svc.as_ref()).await {
+            Ok(rows) => {
+                expenses.set(rows.into_iter().filter(|e| e.deleted_at.is_none()).collect());
+            }
+            Err(e) => {
+                banner.set(Some(Banner::SyncFailed(repo_error_text(&e))));
+            }
+        }
+    });
 }
 
 /// (web) Pull `?code=…` off the URL + the stored PKCE verifier, clearing
@@ -41,14 +215,18 @@ fn main() {
 #[cfg(target_arch = "wasm32")]
 fn take_pkce_callback(store: &Arc<dyn LocalStore>) -> Option<(String, String)> {
     let window = web_sys::window()?;
-    let code = window.location().search().strip_prefix("?code=")?;
+    // web-sys `Location::search()` is `Result<String, JsValue>`; unwrap the Ok
+    // string, then strip the `?code=` prefix.
+    let search = window.location().search().ok()?;
+    let code = search.strip_prefix("?code=")?;
     if code.is_empty() {
         return None;
     }
     let verifier = store.get_raw(PKCE_STORAGE_KEY).ok()??;
     let _ = store.remove_raw(PKCE_STORAGE_KEY);
-    // Keep the URL clean after the exchange.
-    let _ = window.history().map(|h| h.replace_state_with_hash("#"));
+    // The `?code=…` query stays in the URL, but re-exchange is impossible: the
+    // verifier was cleared above, so a refresh returns None here. (web-sys
+    // `History` has no hash-only rewrite; the URL cleanup is cosmetic.)
     Some((code.to_string(), verifier))
 }
 
@@ -68,32 +246,44 @@ fn current_origin() -> String {
 fn App() -> Element {
     let backend = use_memo(AppBackend::make);
 
-    let mut stage = Signal::new(Stage::Booting);
+    // T1-3 boot, computed synchronously: the first paint never waits on an
+    // async task (the 0.8-alpha mobile runtime can leave spawned tasks
+    // pending, which froze the app on the splash). Only a *persisted*
+    // session needs the async restore path (splash → home); a fresh store
+    // goes straight to the login screen.
+    let mut stage = Signal::new(if backend().has_saved_session {
+        Stage::Booting
+    } else {
+        Stage::NoAuth
+    });
     let mut active_tab = Signal::new(Tab::Home);
-    let mut vehicles = use_signal(Vec::new);
-    let mut profile = use_signal(|| None::<Profile>);
-    let mut syncing = use_signal(|| false);
+    let vehicles = use_signal(Vec::new);
+    let profile = use_signal(|| None::<Profile>);
+    let syncing = use_signal(|| false);
     let mut banner = use_signal(|| None::<Banner>);
     let mut auth_mode = Signal::new(AuthMode::SignIn);
     let auth_email = use_signal(String::new);
     let auth_password = use_signal(String::new);
-    let mut auth_busy = use_signal(|| false);
-    let mut auth_error = use_signal(|| None::<String>);
-    let mut auth_info = use_signal(|| None::<String>);
+    let auth_busy = use_signal(|| false);
+    let auth_error = use_signal(|| None::<String>);
+    let auth_info = use_signal(|| None::<String>);
     let wiz = use_wizard();
     let remove_confirm = use_signal(|| None::<Uuid>);
+    // ---- expenses (T2-1)
+    let expenses = use_signal(Vec::new);
+    let expense_form = use_expense_form();
     let mut booted = use_signal(|| false);
 
     // ---- boot -------------------------------------------------------------
-    let backend_boot = backend.clone();
+    let backend_boot = backend;
     let stage_b = stage;
     let banner_b = banner;
     use_effect(move || {
-        if booted() {
+        if booted() || stage_b() != Stage::Booting {
             return;
         }
         booted.set(true);
-        let backend = backend_boot.clone();
+        let backend = backend_boot;
         let profile = profile;
         let vehicles = vehicles;
         let syncing = syncing;
@@ -104,7 +294,16 @@ fn App() -> Element {
             if let Some((code, verifier)) = take_pkce_callback(&backend().store) {
                 match backend().auth.exchange_pkce(&code, &verifier).await {
                     Ok(s) => {
-                        enter_home(&backend(), s, stage_b, active_tab, profile, vehicles, syncing, banner_b);
+                        enter_home(
+                            &backend(),
+                            s,
+                            stage_b,
+                            active_tab,
+                            profile,
+                            vehicles,
+                            syncing,
+                            banner_b,
+                        );
                     }
                     Err(e) => {
                         banner.set(Some(Banner::SyncFailed(auth_error_text(&e))));
@@ -115,9 +314,22 @@ fn App() -> Element {
             // 2) Persisted session.
             match backend().auth.restore_session().await {
                 Ok(Some(s)) => {
-                    enter_home(&backend(), s, stage_b, active_tab, profile, vehicles, syncing, banner_b);
+                    enter_home(
+                        &backend(),
+                        s,
+                        stage_b,
+                        active_tab,
+                        profile,
+                        vehicles,
+                        syncing,
+                        banner_b,
+                    );
                 }
-                Ok(None) => {}
+                // No persisted session: go straight to the login screen
+                // (previously the stage stayed Booting forever here).
+                Ok(None) => {
+                    stage.set(Stage::NoAuth);
+                }
                 Err(e) => {
                     banner.set(Some(Banner::SyncFailed(auth_error_text(&e))));
                     stage.set(Stage::NoAuth);
@@ -126,18 +338,28 @@ fn App() -> Element {
         });
     });
 
+    // ---- expenses: refresh whenever the tab is shown ------------------------
+    {
+        let backend = backend;
+        let stage = stage;
+        let active_tab = active_tab;
+        let expenses = expenses;
+        let banner = banner;
+        use_effect(move || {
+            if stage() == Stage::Home && active_tab() == Tab::Expenses {
+                load_expenses(backend(), expenses, banner);
+            }
+        });
+    }
+
     // ---- auth -------------------------------------------------------------
     let do_auth = {
-        let backend = backend.clone();
-        let email = auth_email.clone();
-        let password = auth_password.clone();
-        let mut busy = auth_busy.clone();
-        let mut error = auth_error.clone();
-        let mut stage = stage;
-        let mut profile = profile;
-        let mut vehicles = vehicles;
-        let mut syncing = syncing;
-        let mut banner = banner;
+        let email = auth_email;
+        let password = auth_password;
+        let mut busy = auth_busy;
+        let mut error = auth_error;
+        let stage = stage;
+        let banner = banner;
         let active_tab = active_tab;
         EventHandler::new(move |_: ()| {
             let email = email.read().trim().to_string();
@@ -145,7 +367,16 @@ fn App() -> Element {
             spawn(async move {
                 match backend().auth.sign_in_email(&email, &password).await {
                     Ok(s) => {
-                        enter_home(&backend(), s, stage, active_tab, profile, vehicles, syncing, banner);
+                        enter_home(
+                            &backend(),
+                            s,
+                            stage,
+                            active_tab,
+                            profile,
+                            vehicles,
+                            syncing,
+                            banner,
+                        );
                     }
                     Err(e) => {
                         error.set(Some(auth_error_text(&e)));
@@ -157,16 +388,8 @@ fn App() -> Element {
     };
 
     let do_google = {
-        let backend = backend.clone();
-        let mut busy = auth_busy.clone();
-        let mut stage = stage;
-        let mut profile = profile;
-        let mut vehicles = vehicles;
-        let mut syncing = syncing;
-        let mut banner = banner;
-        let active_tab = active_tab;
+        let mut busy = auth_busy;
         EventHandler::new(move |_: ()| {
-            let backend = backend.clone();
             let (verifier, challenge) = dasauto_net::oauth::pkce_pair();
             let origin = current_origin();
             let redirect_to = if origin.is_empty() {
@@ -174,7 +397,8 @@ fn App() -> Element {
             } else {
                 &origin
             };
-            let url = dasauto_net::oauth::authorize_url(&backend().base_url, &challenge, &redirect_to);
+            let url =
+                dasauto_net::oauth::authorize_url(&backend().base_url, &challenge, redirect_to);
             let _ = backend().store.set_raw(PKCE_STORAGE_KEY, &verifier);
             #[cfg(target_arch = "wasm32")]
             if let Some(window) = web_sys::window() {
@@ -186,9 +410,9 @@ fn App() -> Element {
     };
 
     let do_switch = EventHandler::new(move |m: AuthMode| {
-        let mut error = auth_error.clone();
-        let mut info = auth_info.clone();
-        let mut busy = auth_busy.clone();
+        let mut error = auth_error;
+        let mut info = auth_info;
+        let mut busy = auth_busy;
         auth_mode.set(m);
         error.set(None);
         info.set(None);
@@ -197,19 +421,21 @@ fn App() -> Element {
 
     // ---- wizard -----------------------------------------------------------
     let on_next = {
-        let wiz = wiz.clone();
         EventHandler::new(move |_: ()| {
-            let mut w = wiz.clone();
+            let mut w = wiz;
             let make = w.make.read().trim().to_string();
             let model = w.model.read().trim().to_string();
             let year_s = w.year.read().trim().to_string();
-            let fuel_type = w.fuel.read().clone();
+            let _fuel_type = *w.fuel.read();
             let plate_raw = w.plate.read().trim().to_string();
             let uf = w.uf.read().clone();
             let _renavam_s = w.renavam.read().trim().to_string();
 
-            if make.is_empty() || model.is_empty() || year_s.is_empty()
-                || plate_raw.is_empty() || uf.is_empty()
+            if make.is_empty()
+                || model.is_empty()
+                || year_s.is_empty()
+                || plate_raw.is_empty()
+                || uf.is_empty()
             {
                 w.error.set(Some(i18n::ERR_FILL_FIELDS.to_string()));
                 return;
@@ -225,27 +451,25 @@ fn App() -> Element {
     };
 
     let on_back = EventHandler::new(move |_: ()| {
-        let mut w = wiz.clone();
+        let mut w = wiz;
         w.step.set(1);
         w.error.set(None);
     });
 
     let on_cancel = EventHandler::new(move |_: ()| {
-        let mut w = wiz.clone();
+        let mut w = wiz;
         w.reset();
         stage.set(Stage::Home);
     });
 
     let on_save_vehicle = {
-        let backend = backend.clone();
-        let mut wiz = wiz.clone();
+        let mut wiz = wiz;
         let mut stage = stage;
         let mut vehicles = vehicles;
-        let profile = profile;
-        let mut werr = wiz.error.clone();
-        let mut wbusy = wiz.busy.clone();
+        let mut werr = wiz.error;
+        let mut wbusy = wiz.busy;
         EventHandler::new(move |_: ()| {
-            let mut w = wiz.clone();
+            let w = wiz;
             let uid = match profile.read().as_ref() {
                 Some(p) => p.id.clone(),
                 None => return,
@@ -260,8 +484,11 @@ fn App() -> Element {
             let uf = w.uf.read().clone();
             let renavam_s = w.renavam.read().trim().to_string();
 
-            if make.is_empty() || model.is_empty() || year_s.is_empty()
-                || plate_raw.is_empty() || uf.is_empty()
+            if make.is_empty()
+                || model.is_empty()
+                || year_s.is_empty()
+                || plate_raw.is_empty()
+                || uf.is_empty()
             {
                 werr.set(Some(i18n::ERR_FILL_FIELDS.to_string()));
                 return;
@@ -278,7 +505,7 @@ fn App() -> Element {
                 werr.set(Some(e.to_string()));
                 return;
             }
-            let fuel_type = FuelType::from_str(&fuel_type);
+            let fuel_type = FuelType::from_label(&fuel_type);
             let renavam = match renavam_s.as_str() {
                 "" => None,
                 digits => {
@@ -307,7 +534,7 @@ fn App() -> Element {
             };
             werr.set(None);
             wbusy.set(true);
-            let backend = backend.clone();
+            let backend = backend;
             let cache = backend().cache.clone();
             spawn(async move {
                 match backend().vehicles.create(vehicle.clone()).await {
@@ -329,7 +556,7 @@ fn App() -> Element {
     };
 
     let on_add_vehicle = EventHandler::new(move |_: ()| {
-        let mut wiz = wiz.clone();
+        let mut wiz = wiz;
         let mut stage = stage;
         wiz.reset();
         stage.set(Stage::AddVehicle);
@@ -339,50 +566,17 @@ fn App() -> Element {
 
     // ---- home -------------------------------------------------------------
     let on_remove_vehicle = {
-        let backend = backend.clone();
-        let mut stage = stage;
-        let mut profile = profile;
-        let mut vehicles = vehicles;
-        let mut banner = banner;
-        let remove_confirm = remove_confirm.clone();
-        let email = auth_email.clone();
-        let password = auth_password.clone();
+        let mut remove_confirm = remove_confirm;
         EventHandler::new(move |u: Uuid| {
-            let backend = backend.clone();
-            let mut stage = stage;
-            let mut profile = profile;
-            let mut vehicles = vehicles;
-            let mut banner = banner;
-            let _remove_confirm = remove_confirm;
-            let mut email = auth_email;
-            let mut password = auth_password;
-            spawn(async move {
-                let uid = u;
-                let _ = backend().cache.clone();
-                let _ = backend().vehicles.remove(uid).await;
-                let _ = backend().cache.clear(&uid.to_string());
-                let _ = backend().auth.sign_out().await;
-                vehicles.set(Vec::new());
-                profile.set(None);
-                banner.set(None);
-                email.set(String::new());
-                password.set(String::new());
-                stage.set(Stage::NoAuth);
-                active_tab.set(Tab::Home);
-            });
+            remove_confirm.set(Some(u));
         })
     };
 
     let on_sign_out = {
-        let backend = backend.clone();
-        let mut profile = profile.clone();
-        let mut vehicles = vehicles.clone();
-        let mut banner = banner.clone();
-        let mut email = auth_email.clone();
-        let mut password = auth_password.clone();
-        let mut stage = stage.clone();
+        let banner = banner;
+        let stage = stage;
         EventHandler::new(move |_: ()| {
-            let backend = backend.clone();
+            let backend = backend;
             let mut profile = profile;
             let mut vehicles = vehicles;
             let mut banner = banner;
@@ -391,7 +585,7 @@ fn App() -> Element {
             let mut stage = stage;
             spawn(async move {
                 if let Some(uid) = profile.read().as_ref().map(|p| p.id.clone()) {
-                    let _ = backend().cache.clear(&uid.to_string());
+                    backend().cache.clear(&uid.to_string());
                     let _ = backend().auth.sign_out().await;
                 }
                 vehicles.set(Vec::new());
@@ -405,21 +599,40 @@ fn App() -> Element {
     };
 
     let on_remove_confirm = {
-        let backend = backend.clone();
-        let remove_confirm = remove_confirm.clone();
-        let on_remove = on_remove_vehicle.clone();
+        let mut remove_confirm = remove_confirm;
+        let mut vehicles = vehicles;
         EventHandler::new(move |_| {
-            if let Some(u) = remove_confirm.read().clone() {
-                let _ = backend().vehicles.remove(u);
-            }
+            let Some(u) = *remove_confirm.read() else {
+                return;
+            };
+            remove_confirm.set(None);
+            let new_list: Vec<Vehicle> = vehicles
+                .read()
+                .iter()
+                .filter(|v| v.id != u)
+                .cloned()
+                .collect();
+            vehicles.set(new_list);
+            let backend = backend;
+            spawn(async move {
+                let _ = backend().vehicles.remove(u).await;
+            });
         })
     };
 
-    let on_remove = on_remove_vehicle.clone();
-    let on_logout = on_sign_out.clone();
+    let on_remove = on_remove_vehicle;
+    let on_logout = on_sign_out;
 
     let on_tab = EventHandler::new(move |t: Tab| {
         active_tab.set(t);
+    });
+
+    let do_expense_save = EventHandler::new(move |_: ()| {
+        save_expense(backend(), expense_form, profile, vehicles, expenses, banner);
+    });
+
+    let do_expense_delete = EventHandler::new(move |id: Uuid| {
+        delete_expense(backend(), expenses, banner, id);
     });
 
     rsx! {
@@ -431,7 +644,7 @@ fn App() -> Element {
             }
             if stage() == Stage::NoAuth {
                 p { class: "sub", "Sessão encerrada — identifique-se para ver os veículos" }
-                auth_screen {
+                AuthScreen {
                     mode: auth_mode,
                     email: auth_email,
                     password: auth_password,
@@ -442,8 +655,10 @@ fn App() -> Element {
                     on_switch: do_switch,
                     on_google: do_google,
                 }
-            } else {
-                home_screen {
+            } else if stage() == Stage::AddVehicle {
+                { wizard_screen(&wiz, on_next, on_back, on_cancel, on_save_vehicle) }
+            } else if stage() == Stage::Home {
+                HomeScreen {
                     vehicles: vehicles,
                     profile: profile,
                     remove_confirm: remove_confirm,
@@ -455,77 +670,14 @@ fn App() -> Element {
                     on_remove: on_remove,
                     on_confirm_remove: on_remove_confirm,
                     on_logout: on_logout,
+                    expenses: expenses,
+                    form: expense_form,
+                    on_expense_save: do_expense_save,
+                    on_expense_delete: do_expense_delete,
                 }
             }
         }
     }
 }
 
-/// T1-3 load sequence: paint the local cache immediately, then refresh from
-/// Supabase in the background (stale-while-revalidate).
-pub fn enter_home(
-    backend: &AppBackend,
-    session: Session,
-    mut stage: Signal<Stage>,
-    mut active_tab: Signal<Tab>,
-    mut profile: Signal<Option<Profile>>,
-    mut vehicles: Signal<Vec<Vehicle>>,
-    mut syncing: Signal<bool>,
-    mut banner: Signal<Option<Banner>>,
-) {
-    profile.set(Some(session.profile()));
-    let user_id = session.user_id;
-    let cached = backend.cache.load(&user_id);
-    vehicles.set(cached);
-    banner.set(None);
-    syncing.set(true);
-    let backend = backend.clone();
-    let mut vehicles = vehicles;
-    spawn(async move {
-        match backend.vehicles.list().await {
-            Ok(all) => {
-                vehicles.set(all);
-                syncing.set(false);
-            }
-            Err(e) => {
-                syncing.set(false);
-                banner.set(Some(Banner::SyncFailed(repo_error_text(&e))));
-            }
-        }
-    });
-}
 
-/// Maps an `AuthError` to a pt-BR user-facing string (T1-3).
-pub fn auth_error_text(e: &AuthError) -> String {
-    match e {
-        AuthError::BadCredentials => i18n::ERR_BAD_CREDS.to_string(),
-        AuthError::EmailAlreadyExists => i18n::ERR_EMAIL_EXISTS.to_string(),
-        AuthError::NoSession => i18n::ERR_SESSION.to_string(),
-        AuthError::Network => i18n::ERR_OFFLINE.to_string(),
-        AuthError::Unconfigured => i18n::ERR_UNCONFIGURED.to_string(),
-        AuthError::Server { status, message } => {
-            format!("{} {}: {}", i18n::ERR_SERVER, status, message)
-        }
-    }
-}
-
-/// Maps a `RepoError` to a pt-BR user-facing string (T1-3).
-pub fn repo_error_text(e: &RepoError) -> String {
-    match e {
-        RepoError::NoSession => i18n::ERR_SESSION.to_string(),
-        RepoError::Network => i18n::ERR_OFFLINE.to_string(),
-        RepoError::Unconfigured => i18n::ERR_UNCONFIGURED.to_string(),
-        RepoError::Server { status, message } => {
-            format!("{} {} · {}", i18n::ERR_SERVER, status, message)
-        }
-    }
-}
-
-/// Consumes a pending PKCE callback in `localStorage` (set by the OAuth
-/// redirect). Returns `None` when the key is absent or the store errors.
-pub fn take_pkce_callback(store: &Arc<dyn LocalStore>) -> Option<String> {
-    let raw = store.get_raw(PKCE_STORAGE_KEY).ok()??;
-    let value: String = serde_json::from_str(&raw).unwrap_or_default();
-    let _ = store.remove_raw(PKCE_STORAGE_KEY);
-    Some(value)
-}

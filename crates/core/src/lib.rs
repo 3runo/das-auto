@@ -8,16 +8,18 @@
 
 pub mod api;
 pub mod entities;
+pub mod expenses;
+#[cfg(feature = "fakes")]
+pub mod fakes;
 pub mod money;
 pub mod plate;
 pub mod session;
-#[cfg(feature = "fakes")]
-pub mod fakes;
 pub mod store;
 pub mod sync;
 pub mod vehicle_cache;
 
 /// Re-exported for consumers that carry timestamps (entities, sync).
-pub use chrono::{DateTime, NaiveDate, Utc};
+/// `Local` backs the UI's "today" (expense month summary).
+pub use chrono::{DateTime, Local, NaiveDate, Utc};
 /// Re-exported for consumers that generate row ids (api, app).
 pub use uuid::Uuid;

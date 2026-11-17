@@ -38,7 +38,7 @@ impl FuelType {
     }
 
     /// Parse a label from the UI select (serde value is the lowercase name).
-    pub fn from_str(label: &str) -> Self {
+    pub fn from_label(label: &str) -> Self {
         match label {
             "gasoline" => FuelType::Gasoline,
             "ethanol" => FuelType::Ethanol,
@@ -62,6 +62,43 @@ pub enum ExpenseCategory {
     Tire,
     Fine,
     Other,
+}
+
+impl ExpenseCategory {
+    /// All categories, in the UI's display order (T2-1 chips).
+    pub const ALL: [ExpenseCategory; 7] = [
+        ExpenseCategory::Fuel,
+        ExpenseCategory::Maintenance,
+        ExpenseCategory::Insurance,
+        ExpenseCategory::Tax,
+        ExpenseCategory::Tire,
+        ExpenseCategory::Fine,
+        ExpenseCategory::Other,
+    ];
+
+    pub fn as_label(&self) -> &'static str {
+        match self {
+            ExpenseCategory::Fuel => "Combustível",
+            ExpenseCategory::Maintenance => "Manutenção",
+            ExpenseCategory::Insurance => "Seguro",
+            ExpenseCategory::Tax => "Imposto",
+            ExpenseCategory::Tire => "Pneu",
+            ExpenseCategory::Fine => "Multa",
+            ExpenseCategory::Other => "Outro",
+        }
+    }
+
+    pub fn from_label(label: &str) -> Self {
+        match label {
+            "fuel" => ExpenseCategory::Fuel,
+            "maintenance" => ExpenseCategory::Maintenance,
+            "insurance" => ExpenseCategory::Insurance,
+            "tax" => ExpenseCategory::Tax,
+            "tire" => ExpenseCategory::Tire,
+            "fine" => ExpenseCategory::Fine,
+            _ => ExpenseCategory::Other,
+        }
+    }
 }
 
 /// Document types (SQL: `documents.doc_type` check constraint).
